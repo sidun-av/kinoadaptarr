@@ -1,0 +1,17 @@
+services:
+  kinoadaptarr:
+    image: ghcr.io/sidun-av/kinoadaptarr:latest
+    container_name: kinoadaptarr
+    restart: unless-stopped
+    environment:
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY}
+      - KINOPOISK_API_KEY=${KINOPOISK_API_KEY}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+    volumes:
+      - ./kinoadaptarr/config.yml:/config.yml:ro
+      - kinoadaptarr_data:/data
+    ports:
+      - "8090:8080"
+
+volumes:
+  kinoadaptarr_data:

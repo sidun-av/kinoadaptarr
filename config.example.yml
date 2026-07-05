@@ -1,0 +1,22 @@
+port: 8080
+
+# The full Prowlarr Torznab endpoint Sonarr would otherwise query directly,
+# including Prowlarr's own apikey — find it in Prowlarr under
+# Settings > Apps > (your Sonarr app connection), or use Prowlarr's generic
+# aggregate Torznab URL from Settings > General.
+upstream_url: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"
+
+kinopoisk:
+  # Free tier at https://poiskkino.dev/ (200 requests/day) — plenty for a
+  # home library with caching enabled.
+  base_url: "https://api.kinopoisk.dev"
+  api_key: "${KINOPOISK_API_KEY}"
+
+tmdb:
+  # Free API key from https://www.themoviedb.org/settings/api
+  base_url: "https://api.themoviedb.org/3"
+  api_key: "${TMDB_API_KEY}"
+
+# SQLite cache of resolved (Cyrillic title -> English title) mappings, so
+# repeat lookups for the same show don't re-query Kinopoisk/TMDB.
+cache_path: "/data/kinoadaptarr.db"

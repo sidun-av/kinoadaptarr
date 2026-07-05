@@ -1,0 +1,67 @@
+// Package tmdb fetches a TV series' canonical English title from TheMovieDB
+// by ID (not by fuzzy text search, since TMDB's text search has known
+// coverage gaps for niche non-English content — an ID lookup is reliable
+// regardless of that).
+package tmdb
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+// Client fetches series metadata from TMDB.
+type Client struct {
+	BaseURL    string
+	APIKey     string
+	HTTPClient *http.Client
+}
+
+// New returns a Client with a sane default timeout. baseURL should be the
+// API root, e.g. "https://api.themoviedb.org/3" (no trailing slash).
+func New(baseURL, apiKey string) *Client {
+	return &Client{
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+		HTTPClient: &http.Client{
+			Timeout: 5 * time.Second,
+		},
+	}
+}
+
+type tvResponse struct {
+	Name string `json:"name"`
+}
+
+// TVTitle returns the canonical English title (en-US locale) for the TV
+// series with the given TMDB ID.
+func (c *Client) TVTitle(tmdbID int) (string, error) {
+	u := fmt.Sprintf("%s/tv/%d?language=en-US", c.BaseURL, tmdbID)
+
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("tmdb request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("tmdb returned status %d", resp.StatusCode)
+	}
+
+	var parsed tvResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("decode tmdb response: %w", err)
+	}
+	if parsed.Name == "" {
+		return "", fmt.Errorf("tmdb response for id %d had no name", tmdbID)
+	}
+	return parsed.Name, nil
+}
