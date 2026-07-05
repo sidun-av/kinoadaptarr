@@ -1,10 +1,16 @@
 port: 8080
 
-# The full Prowlarr Torznab endpoint Sonarr would otherwise query directly,
-# including Prowlarr's own apikey — find it in Prowlarr under
-# Settings > Apps > (your Sonarr app connection), or use Prowlarr's generic
-# aggregate Torznab URL from Settings > General.
-upstream_url: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"
+# Prowlarr syncs each of its indexers to Sonarr as its own separate Torznab
+# entry (rather than one combined feed) — each entry here becomes a route
+# at /api/{name}. Match these names/paths to whatever indexers Sonarr's
+# Settings > Indexers page currently shows synced from Prowlarr, and their
+# numbered URL paths (Prowlarr assigns a number per configured app/indexer
+# pair, visible in each indexer's existing URL in Sonarr).
+upstreams:
+  kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"
+  nonameclub: "http://prowlarr:9696/2/api?apikey=${PROWLARR_API_KEY}&t=search"
+  nonameclubl: "http://prowlarr:9696/3/api?apikey=${PROWLARR_API_KEY}&t=search"
+  rutracker: "http://prowlarr:9696/5/api?apikey=${PROWLARR_API_KEY}&t=search"
 
 kinopoisk:
   # Free tier at https://poiskkino.dev/ (200 requests/day) — plenty for a

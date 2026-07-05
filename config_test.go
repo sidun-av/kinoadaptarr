@@ -18,7 +18,8 @@ func writeTempConfig(t *testing.T, contents string) string {
 
 func TestLoadConfigAppliesDefaults(t *testing.T) {
 	path := writeTempConfig(t, `
-upstream_url: "http://prowlarr:9696/1/api?apikey=abc&t=search"
+upstreams:
+  kinozal: "http://prowlarr:9696/1/api?apikey=abc&t=search"
 kinopoisk:
   api_key: kp-key
 tmdb:
@@ -43,12 +44,14 @@ tmdb:
 	}
 }
 
-func TestLoadConfigExpandsEnvVars(t *testing.T) {
+func TestLoadConfigExpandsEnvVarsInUpstreamsAndKeys(t *testing.T) {
 	t.Setenv("TEST_KP_KEY", "secret-kp-key")
 	t.Setenv("TEST_TMDB_KEY", "secret-tmdb-key")
+	t.Setenv("TEST_PROWLARR_KEY", "secret-prowlarr-key")
 
 	path := writeTempConfig(t, `
-upstream_url: "http://prowlarr:9696/1/api?apikey=abc&t=search"
+upstreams:
+  kinozal: "http://prowlarr:9696/1/api?apikey=${TEST_PROWLARR_KEY}&t=search"
 kinopoisk:
   api_key: ${TEST_KP_KEY}
 tmdb:
@@ -65,9 +68,13 @@ tmdb:
 	if cfg.TMDB.APIKey != "secret-tmdb-key" {
 		t.Errorf("expected expanded tmdb key, got %q", cfg.TMDB.APIKey)
 	}
+	want := "http://prowlarr:9696/1/api?apikey=secret-prowlarr-key&t=search"
+	if cfg.Upstreams["kinozal"] != want {
+		t.Errorf("expected expanded upstream url %q, got %q", want, cfg.Upstreams["kinozal"])
+	}
 }
 
-func TestLoadConfigRequiresUpstreamURL(t *testing.T) {
+func TestLoadConfigRequiresAtLeastOneUpstream(t *testing.T) {
 	path := writeTempConfig(t, `
 kinopoisk:
   api_key: kp-key
@@ -75,13 +82,14 @@ tmdb:
   api_key: tmdb-key
 `)
 	if _, err := LoadConfig(path); err == nil {
-		t.Fatal("expected error for missing upstream_url, got nil")
+		t.Fatal("expected error for missing upstreams, got nil")
 	}
 }
 
 func TestLoadConfigRequiresKinopoiskKey(t *testing.T) {
 	path := writeTempConfig(t, `
-upstream_url: "http://prowlarr:9696/1/api?apikey=abc&t=search"
+upstreams:
+  kinozal: "http://prowlarr:9696/1/api?apikey=abc&t=search"
 tmdb:
   api_key: tmdb-key
 `)
@@ -92,7 +100,8 @@ tmdb:
 
 func TestLoadConfigRequiresTMDBKey(t *testing.T) {
 	path := writeTempConfig(t, `
-upstream_url: "http://prowlarr:9696/1/api?apikey=abc&t=search"
+upstreams:
+  kinozal: "http://prowlarr:9696/1/api?apikey=abc&t=search"
 kinopoisk:
   api_key: kp-key
 `)

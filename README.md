@@ -27,10 +27,16 @@ team has explicitly and repeatedly declined to build the equivalent
 Sonarr → kinoadaptarr → Prowlarr → indexers
 ```
 
-Sonarr's indexer config points at kinoadaptarr instead of Prowlarr directly.
+Prowlarr syncs each of its indexers to Sonarr as its own separate Torznab
+entry rather than one combined feed, so kinoadaptarr proxies **one route per
+indexer**: `/api/{name}` for each entry under `upstreams:` in its config.
+Point each of Sonarr's existing per-indexer URLs at the matching
+`http://kinoadaptarr:8080/api/{name}` instead of directly at Prowlarr.
+
 For every search:
 
-1. kinoadaptarr forwards the request to the real Prowlarr instance verbatim.
+1. kinoadaptarr forwards the request to the corresponding real Prowlarr
+   indexer endpoint verbatim.
 2. For each result whose title contains Cyrillic text, it extracts the
    probable series-name segment (everything before season/episode/year
    markers).
@@ -66,8 +72,11 @@ obscure/very-recent case, not eliminates it entirely.
 
 Copy [`config.example.yml`](config.example.yml) to `config.yml` and edit:
 
-- `upstream_url` — the full Prowlarr Torznab endpoint kinoadaptarr should
-  forward to, including Prowlarr's own `apikey`.
+- `upstreams` — one entry per indexer Sonarr currently has synced from
+  Prowlarr. Find each one's existing URL in Sonarr's Settings > Indexers
+  page (each shows a path like `http://prowlarr:9696/1/api?apikey=...` —
+  the number differs per indexer/app pair) and add a matching named entry
+  here, e.g. `kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"`.
 - `kinopoisk.api_key`, `tmdb.api_key` — from step 1.
 
 ### 3. Run it alongside Prowlarr
@@ -93,19 +102,20 @@ volumes:
 
 Add it to the same Docker network as Prowlarr.
 
-### 4. Point Sonarr at it instead of Prowlarr
+### 4. Point Sonarr's indexers at it instead of Prowlarr directly
 
-In Sonarr, edit the indexer that currently points at Prowlarr and change its
-URL to `http://kinoadaptarr:8080/api` (keeping Sonarr's own API key/settings
-as they were) — kinoadaptarr forwards every query to the real Prowlarr
-instance and rewrites the response before Sonarr ever sees it.
+In Sonarr's Settings > Indexers, edit **each** indexer currently synced from
+Prowlarr and change its URL from `http://prowlarr:9696/{N}/api` to
+`http://kinoadaptarr:8080/api/{name}` — using the matching name you gave it
+under `upstreams:` in kinoadaptarr's config. Leave everything else (API key,
+categories, priority) as Sonarr already has it.
 
 ## Configuration reference
 
 | Field | Default | Description |
 |---|---|---|
 | `port` | `8080` | Port the HTTP server listens on |
-| `upstream_url` | — (required) | Full Prowlarr Torznab URL, including its own `apikey` |
+| `upstreams.<name>` | — (at least one required) | Full Torznab URL for one Prowlarr-synced indexer, including its own `apikey`. Exposed at `/api/<name>` |
 | `kinopoisk.base_url` | `https://api.kinopoisk.dev` | Kinopoisk API root |
 | `kinopoisk.api_key` | — (required) | Kinopoisk API key |
 | `tmdb.base_url` | `https://api.themoviedb.org/3` | TMDB API root |

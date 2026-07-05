@@ -12,10 +12,16 @@ type Config struct {
 	// Port the HTTP server listens on.
 	Port int `yaml:"port"`
 
-	// UpstreamURL is the full Prowlarr Torznab endpoint, including its own
-	// apikey query parameter, e.g.
-	// "http://prowlarr:9696/1/api?apikey=xxxx&t=search"
-	UpstreamURL string `yaml:"upstream_url"`
+	// Upstreams maps a route name (used as /api/{name}) to the full Torznab
+	// endpoint for one Prowlarr-synced indexer, including its own apikey
+	// query parameter, e.g.
+	// kinozal: "http://prowlarr:9696/1/api?apikey=xxxx&t=search"
+	//
+	// Prowlarr syncs each of its indexers to Sonarr as a separate Torznab
+	// entry (rather than one combined feed), so each one needs its own
+	// route here — point each of Sonarr's existing indexer URLs at
+	// http://kinoadaptarr:8080/api/{name} instead of directly at Prowlarr.
+	Upstreams map[string]string `yaml:"upstreams"`
 
 	Kinopoisk KinopoiskConfig `yaml:"kinopoisk"`
 	TMDB      TMDBConfig      `yaml:"tmdb"`
@@ -51,7 +57,9 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	cfg.UpstreamURL = os.Expand(cfg.UpstreamURL, os.Getenv)
+	for name, url := range cfg.Upstreams {
+		cfg.Upstreams[name] = os.Expand(url, os.Getenv)
+	}
 	cfg.Kinopoisk.BaseURL = os.Expand(cfg.Kinopoisk.BaseURL, os.Getenv)
 	cfg.Kinopoisk.APIKey = os.Expand(cfg.Kinopoisk.APIKey, os.Getenv)
 	cfg.TMDB.BaseURL = os.Expand(cfg.TMDB.BaseURL, os.Getenv)
@@ -70,8 +78,13 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.CachePath = "/data/kinoadaptarr.db"
 	}
 
-	if cfg.UpstreamURL == "" {
-		return nil, fmt.Errorf("upstream_url is required")
+	if len(cfg.Upstreams) == 0 {
+		return nil, fmt.Errorf("at least one entry under upstreams is required")
+	}
+	for name, url := range cfg.Upstreams {
+		if url == "" {
+			return nil, fmt.Errorf("upstreams.%s must not be empty", name)
+		}
 	}
 	if cfg.Kinopoisk.APIKey == "" {
 		return nil, fmt.Errorf("kinopoisk.api_key is required")
