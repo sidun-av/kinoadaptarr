@@ -1,7 +1,7 @@
 // Package proxy implements the Torznab-compatible HTTP endpoint that Sonarr
-// points at instead of Prowlarr directly: it forwards the request to the
-// real Prowlarr instance, rewrites Cyrillic release titles in the response,
-// and returns the modified feed.
+// or Radarr points at instead of Prowlarr directly: it forwards the request
+// to the real Prowlarr instance, rewrites Cyrillic release titles in the
+// response, and returns the modified feed.
 package proxy
 
 import (
@@ -11,12 +11,13 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sidun-av/kinoadaptarr/internal/resolver"
 	"github.com/sidun-av/kinoadaptarr/internal/torznab"
 )
 
 // TitleResolver is satisfied by *resolver.Resolver.
 type TitleResolver interface {
-	Resolve(releaseTitle string) string
+	Resolve(releaseTitle string, mediaType resolver.MediaType) string
 }
 
 // Handler proxies Torznab requests to an upstream indexer aggregator
@@ -30,11 +31,23 @@ type Handler struct {
 // NewHandler builds a Handler. upstreamURL is the full Prowlarr Torznab
 // endpoint, including its own apikey query parameter — this proxy forwards
 // the caller's query string verbatim alongside it.
-func NewHandler(upstreamURL string, resolver TitleResolver, client *http.Client) *Handler {
+func NewHandler(upstreamURL string, res TitleResolver, client *http.Client) *Handler {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Handler{UpstreamURL: upstreamURL, Resolver: resolver, HTTPClient: client}
+	return &Handler{UpstreamURL: upstreamURL, Resolver: res, HTTPClient: client}
+}
+
+// mediaTypeFromQuery maps a Torznab request's "t" parameter to a
+// resolver.MediaType. Sonarr always searches with t=tvsearch, Radarr always
+// with t=movie; anything else (e.g. a generic t=search or the t=caps
+// capabilities probe) defaults to TV, which is harmless since those
+// requests either return no Cyrillic titles or aren't real searches.
+func mediaTypeFromQuery(q string) resolver.MediaType {
+	if strings.Contains(q, "t=movie") {
+		return resolver.MediaMovie
+	}
+	return resolver.MediaTV
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +59,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		upstream += sep + r.URL.RawQuery
 	}
+	mediaType := mediaTypeFromQuery(r.URL.RawQuery)
 
 	resp, err := h.HTTPClient.Get(upstream)
 	if err != nil {
@@ -79,7 +93,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i := range rss.Channel.Items {
-		rss.Channel.Items[i].Title = h.Resolver.Resolve(rss.Channel.Items[i].Title)
+		rss.Channel.Items[i].Title = h.Resolver.Resolve(rss.Channel.Items[i].Title, mediaType)
 	}
 
 	out, err := torznab.Marshal(rss)

@@ -1,7 +1,7 @@
-// Package tmdb fetches a TV series' canonical English title from TheMovieDB
-// by ID (not by fuzzy text search, since TMDB's text search has known
-// coverage gaps for niche non-English content — an ID lookup is reliable
-// regardless of that).
+// Package tmdb fetches a movie or TV series' canonical English title from
+// TheMovieDB by ID (not by fuzzy text search, since TMDB's text search has
+// known coverage gaps for niche non-English content — an ID lookup is
+// reliable regardless of that).
 package tmdb
 
 import (
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Client fetches series metadata from TMDB.
+// Client fetches metadata from TMDB.
 type Client struct {
 	BaseURL    string
 	APIKey     string
@@ -30,15 +30,21 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
-type tvResponse struct {
-	Name string `json:"name"`
-}
-
 // TVTitle returns the canonical English title (en-US locale) for the TV
 // series with the given TMDB ID.
 func (c *Client) TVTitle(tmdbID int) (string, error) {
-	u := fmt.Sprintf("%s/tv/%d?language=en-US", c.BaseURL, tmdbID)
+	return c.titleField(fmt.Sprintf("%s/tv/%d?language=en-US", c.BaseURL, tmdbID), "name")
+}
 
+// MovieTitle returns the canonical English title (en-US locale) for the
+// movie with the given TMDB ID.
+func (c *Client) MovieTitle(tmdbID int) (string, error) {
+	return c.titleField(fmt.Sprintf("%s/movie/%d?language=en-US", c.BaseURL, tmdbID), "title")
+}
+
+// titleField fetches u and extracts the named top-level JSON string field
+// (TMDB names it "name" for TV series and "title" for movies).
+func (c *Client) titleField(u, field string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
@@ -56,12 +62,21 @@ func (c *Client) TVTitle(tmdbID int) (string, error) {
 		return "", fmt.Errorf("tmdb returned status %d", resp.StatusCode)
 	}
 
-	var parsed tvResponse
+	var parsed map[string]json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return "", fmt.Errorf("decode tmdb response: %w", err)
 	}
-	if parsed.Name == "" {
-		return "", fmt.Errorf("tmdb response for id %d had no name", tmdbID)
+
+	raw, ok := parsed[field]
+	if !ok {
+		return "", fmt.Errorf("tmdb response had no %q field", field)
 	}
-	return parsed.Name, nil
+	var title string
+	if err := json.Unmarshal(raw, &title); err != nil {
+		return "", fmt.Errorf("decode %q field: %w", field, err)
+	}
+	if title == "" {
+		return "", fmt.Errorf("tmdb response had an empty %q field", field)
+	}
+	return title, nil
 }

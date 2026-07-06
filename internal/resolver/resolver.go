@@ -11,6 +11,15 @@ import (
 	"github.com/sidun-av/kinoadaptarr/internal/rewrite"
 )
 
+// MediaType distinguishes a TV series lookup from a movie lookup, since
+// TMDB exposes them via different endpoints/fields ("name" vs "title").
+type MediaType string
+
+const (
+	MediaTV    MediaType = "tv"
+	MediaMovie MediaType = "movie"
+)
+
 // KinopoiskSearcher is satisfied by *kinopoisk.Client.
 type KinopoiskSearcher interface {
 	Search(title string) (*kinopoisk.Match, error)
@@ -19,6 +28,7 @@ type KinopoiskSearcher interface {
 // TMDBTitleFetcher is satisfied by *tmdb.Client.
 type TMDBTitleFetcher interface {
 	TVTitle(tmdbID int) (string, error)
+	MovieTitle(tmdbID int) (string, error)
 }
 
 // Cache is satisfied by *cache.Cache.
@@ -41,11 +51,12 @@ func New(kp KinopoiskSearcher, tm TMDBTitleFetcher, c Cache) *Resolver {
 }
 
 // Resolve rewrites releaseTitle if it contains Cyrillic text and a mapping
-// can be found (via cache, or a fresh Kinopoisk+TMDB lookup). If no Cyrillic
-// text is present, or no mapping can be resolved, releaseTitle is returned
-// unchanged — this function never errors out the caller; lookup failures
-// are logged and treated as a pass-through.
-func (r *Resolver) Resolve(releaseTitle string) string {
+// can be found (via cache, or a fresh Kinopoisk+TMDB lookup). mediaType
+// selects which TMDB endpoint/field to resolve the title against. If no
+// Cyrillic text is present, or no mapping can be resolved, releaseTitle is
+// returned unchanged — this function never errors out the caller; lookup
+// failures are logged and treated as a pass-through.
+func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	if !cyrillic.HasCyrillic(releaseTitle) {
 		return releaseTitle
 	}
@@ -55,8 +66,12 @@ func (r *Resolver) Resolve(releaseTitle string) string {
 		return releaseTitle
 	}
 
-	if m, ok, err := r.Cache.Get(segment); err != nil {
-		log.Printf("resolver: cache lookup failed for %q: %v", segment, err)
+	// Namespaced by media type: the same Cyrillic string could plausibly
+	// refer to a differently-titled movie and TV series.
+	cacheKey := string(mediaType) + ":" + segment
+
+	if m, ok, err := r.Cache.Get(cacheKey); err != nil {
+		log.Printf("resolver: cache lookup failed for %q: %v", cacheKey, err)
 	} else if ok {
 		return rewrite.Title(releaseTitle, segment, m.EnglishTitle)
 	}
@@ -71,14 +86,19 @@ func (r *Resolver) Resolve(releaseTitle string) string {
 		return releaseTitle
 	}
 
-	englishTitle, err := r.TMDB.TVTitle(kpMatch.ExternalID.TMDB)
+	var englishTitle string
+	if mediaType == MediaMovie {
+		englishTitle, err = r.TMDB.MovieTitle(kpMatch.ExternalID.TMDB)
+	} else {
+		englishTitle, err = r.TMDB.TVTitle(kpMatch.ExternalID.TMDB)
+	}
 	if err != nil {
 		log.Printf("resolver: tmdb lookup failed for tmdb id %d (%q): %v", kpMatch.ExternalID.TMDB, segment, err)
 		return releaseTitle
 	}
 
-	if err := r.Cache.Put(segment, cache.Mapping{EnglishTitle: englishTitle, TMDBID: kpMatch.ExternalID.TMDB}); err != nil {
-		log.Printf("resolver: failed to cache mapping for %q: %v", segment, err)
+	if err := r.Cache.Put(cacheKey, cache.Mapping{EnglishTitle: englishTitle, TMDBID: kpMatch.ExternalID.TMDB}); err != nil {
+		log.Printf("resolver: failed to cache mapping for %q: %v", cacheKey, err)
 	}
 
 	return rewrite.Title(releaseTitle, segment, englishTitle)

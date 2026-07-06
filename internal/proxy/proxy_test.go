@@ -6,13 +6,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	resolverPkg "github.com/sidun-av/kinoadaptarr/internal/resolver"
 )
 
 type fakeResolver struct {
-	rewrites map[string]string
+	rewrites     map[string]string
+	gotMediaType resolverPkg.MediaType
 }
 
-func (f *fakeResolver) Resolve(title string) string {
+func (f *fakeResolver) Resolve(title string, mediaType resolverPkg.MediaType) string {
+	f.gotMediaType = mediaType
 	if rewritten, ok := f.rewrites[title]; ok {
 		return rewritten
 	}
@@ -59,6 +63,54 @@ func TestServeHTTPRewritesTitlesAndForwardsQuery(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "Первая ракетка") {
 		t.Errorf("expected original Cyrillic title to be replaced, got:\n%s", rec.Body.String())
+	}
+	if resolver.gotMediaType != resolverPkg.MediaTV {
+		t.Errorf("expected t=tvsearch to map to MediaTV, got %q", resolver.gotMediaType)
+	}
+}
+
+func TestServeHTTPDetectsMovieMediaType(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Какой-то Фильм 2024 WEBDL</title>
+    </item>
+  </channel>
+</rss>`)
+	}))
+	defer upstream.Close()
+
+	fr := &fakeResolver{}
+	h := NewHandler(upstream.URL, fr, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api?t=movie&q=some+film", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if fr.gotMediaType != resolverPkg.MediaMovie {
+		t.Errorf("expected t=movie to map to MediaMovie, got %q", fr.gotMediaType)
+	}
+}
+
+func TestMediaTypeFromQuery(t *testing.T) {
+	cases := []struct {
+		query string
+		want  resolverPkg.MediaType
+	}{
+		{"t=movie&q=x", resolverPkg.MediaMovie},
+		{"t=tvsearch&q=x", resolverPkg.MediaTV},
+		{"t=search&q=x", resolverPkg.MediaTV},
+		{"t=caps", resolverPkg.MediaTV},
+	}
+	for _, c := range cases {
+		if got := mediaTypeFromQuery(c.query); got != c.want {
+			t.Errorf("mediaTypeFromQuery(%q) = %q, want %q", c.query, got, c.want)
+		}
 	}
 }
 

@@ -20,14 +20,21 @@ func (f *fakeKinopoisk) Search(title string) (*kinopoisk.Match, error) {
 }
 
 type fakeTMDB struct {
-	title     string
-	err       error
-	callCount int
+	tvTitle        string
+	movieTitle     string
+	err            error
+	tvCallCount    int
+	movieCallCount int
 }
 
 func (f *fakeTMDB) TVTitle(tmdbID int) (string, error) {
-	f.callCount++
-	return f.title, f.err
+	f.tvCallCount++
+	return f.tvTitle, f.err
+}
+
+func (f *fakeTMDB) MovieTitle(tmdbID int) (string, error) {
+	f.movieCallCount++
+	return f.movieTitle, f.err
 }
 
 type fakeCache struct {
@@ -57,29 +64,47 @@ func TestResolvePassesThroughNonCyrillicTitles(t *testing.T) {
 	r := New(kp, tm, newFakeCache())
 
 	in := "Top Tennis Player S01E01 WEBRip"
-	if got := r.Resolve(in); got != in {
+	if got := r.Resolve(in, MediaTV); got != in {
 		t.Errorf("Resolve() = %q, want unchanged %q", got, in)
 	}
-	if kp.callCount != 0 || tm.callCount != 0 {
-		t.Errorf("expected no external lookups for a non-Cyrillic title, got kp=%d tm=%d", kp.callCount, tm.callCount)
+	if kp.callCount != 0 || tm.tvCallCount != 0 {
+		t.Errorf("expected no external lookups for a non-Cyrillic title, got kp=%d tm=%d", kp.callCount, tm.tvCallCount)
 	}
 }
 
-func TestResolveFullLookupChain(t *testing.T) {
+func TestResolveFullLookupChainTV(t *testing.T) {
 	kpMatch := &kinopoisk.Match{Name: "Первая ракетка"}
 	kpMatch.ExternalID.TMDB = 123456
 
 	kp := &fakeKinopoisk{match: kpMatch}
-	tm := &fakeTMDB{title: "Top Tennis Player"}
+	tm := &fakeTMDB{tvTitle: "Top Tennis Player"}
 	r := New(kp, tm, newFakeCache())
 
 	in := "Первая ракетка (Сезон 1 Серия 5) WEBDL"
 	want := "Top Tennis Player (S1E5) WEBDL"
-	if got := r.Resolve(in); got != want {
+	if got := r.Resolve(in, MediaTV); got != want {
 		t.Errorf("Resolve() = %q, want %q", got, want)
 	}
-	if kp.callCount != 1 || tm.callCount != 1 {
-		t.Errorf("expected exactly one kinopoisk+tmdb lookup, got kp=%d tm=%d", kp.callCount, tm.callCount)
+	if kp.callCount != 1 || tm.tvCallCount != 1 || tm.movieCallCount != 0 {
+		t.Errorf("expected one kinopoisk+tv lookup and no movie lookup, got kp=%d tv=%d movie=%d", kp.callCount, tm.tvCallCount, tm.movieCallCount)
+	}
+}
+
+func TestResolveFullLookupChainMovie(t *testing.T) {
+	kpMatch := &kinopoisk.Match{Name: "Какой-то Фильм"}
+	kpMatch.ExternalID.TMDB = 654321
+
+	kp := &fakeKinopoisk{match: kpMatch}
+	tm := &fakeTMDB{movieTitle: "Some Movie"}
+	r := New(kp, tm, newFakeCache())
+
+	in := "Какой-то Фильм 2024 WEBDL"
+	want := "Some Movie 2024 WEBDL"
+	if got := r.Resolve(in, MediaMovie); got != want {
+		t.Errorf("Resolve() = %q, want %q", got, want)
+	}
+	if kp.callCount != 1 || tm.movieCallCount != 1 || tm.tvCallCount != 0 {
+		t.Errorf("expected one kinopoisk+movie lookup and no tv lookup, got kp=%d tv=%d movie=%d", kp.callCount, tm.tvCallCount, tm.movieCallCount)
 	}
 }
 
@@ -88,18 +113,38 @@ func TestResolveUsesCacheOnSecondCall(t *testing.T) {
 	kpMatch.ExternalID.TMDB = 123456
 
 	kp := &fakeKinopoisk{match: kpMatch}
-	tm := &fakeTMDB{title: "Top Tennis Player"}
+	tm := &fakeTMDB{tvTitle: "Top Tennis Player"}
 	r := New(kp, tm, newFakeCache())
 
 	in := "Первая ракетка (Сезон 1 Серия 5) WEBDL"
-	first := r.Resolve(in)
-	second := r.Resolve(in)
+	first := r.Resolve(in, MediaTV)
+	second := r.Resolve(in, MediaTV)
 
 	if first != second {
 		t.Errorf("expected identical results, got %q then %q", first, second)
 	}
-	if kp.callCount != 1 || tm.callCount != 1 {
-		t.Errorf("expected the second call to hit the cache (no new lookups), got kp=%d tm=%d", kp.callCount, tm.callCount)
+	if kp.callCount != 1 || tm.tvCallCount != 1 {
+		t.Errorf("expected the second call to hit the cache (no new lookups), got kp=%d tv=%d", kp.callCount, tm.tvCallCount)
+	}
+}
+
+func TestResolveDoesNotConfuseMovieAndTVCacheEntries(t *testing.T) {
+	kpMatch := &kinopoisk.Match{Name: "Первая ракетка"}
+	kpMatch.ExternalID.TMDB = 123456
+
+	kp := &fakeKinopoisk{match: kpMatch}
+	tm := &fakeTMDB{tvTitle: "Top Tennis Player (Series)", movieTitle: "Top Tennis Player (Movie)"}
+	r := New(kp, tm, newFakeCache())
+
+	in := "Первая ракетка 2024"
+	tvResult := r.Resolve(in, MediaTV)
+	movieResult := r.Resolve(in, MediaMovie)
+
+	if tvResult == movieResult {
+		t.Errorf("expected distinct tv/movie resolutions, both came back as %q", tvResult)
+	}
+	if kp.callCount != 2 {
+		t.Errorf("expected a separate kinopoisk lookup per media type (no cross-contamination), got %d", kp.callCount)
 	}
 }
 
@@ -109,11 +154,11 @@ func TestResolveReturnsOriginalOnKinopoiskMiss(t *testing.T) {
 	r := New(kp, tm, newFakeCache())
 
 	in := "Неизвестный Сериал Сезон 1 Серия 1"
-	if got := r.Resolve(in); got != in {
+	if got := r.Resolve(in, MediaTV); got != in {
 		t.Errorf("Resolve() = %q, want unchanged %q on a kinopoisk miss", got, in)
 	}
-	if tm.callCount != 0 {
-		t.Errorf("expected no TMDB call when kinopoisk found nothing, got %d", tm.callCount)
+	if tm.tvCallCount != 0 {
+		t.Errorf("expected no TMDB call when kinopoisk found nothing, got %d", tm.tvCallCount)
 	}
 }
 
@@ -123,7 +168,7 @@ func TestResolveReturnsOriginalOnKinopoiskError(t *testing.T) {
 	r := New(kp, tm, newFakeCache())
 
 	in := "Первая ракетка Сезон 1"
-	if got := r.Resolve(in); got != in {
+	if got := r.Resolve(in, MediaTV); got != in {
 		t.Errorf("Resolve() = %q, want unchanged %q on a kinopoisk error", got, in)
 	}
 }
@@ -137,7 +182,7 @@ func TestResolveReturnsOriginalOnTMDBError(t *testing.T) {
 	r := New(kp, tm, newFakeCache())
 
 	in := "Первая ракетка Сезон 1"
-	if got := r.Resolve(in); got != in {
+	if got := r.Resolve(in, MediaTV); got != in {
 		t.Errorf("Resolve() = %q, want unchanged %q on a tmdb error", got, in)
 	}
 }

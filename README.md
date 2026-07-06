@@ -1,8 +1,8 @@
 # kinoadaptarr
 
 A Torznab proxy that resolves Cyrillic/Russian release titles to their
-canonical TMDB English title, so Sonarr can match releases it would
-otherwise silently reject.
+canonical TMDB English title, so Sonarr and Radarr can match releases they
+would otherwise silently reject.
 
 ## The problem
 
@@ -24,14 +24,24 @@ team has explicitly and repeatedly declined to build the equivalent
 ## How it works
 
 ```
-Sonarr → kinoadaptarr → Prowlarr → indexers
+Sonarr/Radarr → kinoadaptarr → Prowlarr → indexers
 ```
 
-Prowlarr syncs each of its indexers to Sonarr as its own separate Torznab
-entry rather than one combined feed, so kinoadaptarr proxies **one route per
-indexer**: `/api/{name}` for each entry under `upstreams:` in its config.
-Point each of Sonarr's existing per-indexer URLs at the matching
-`http://kinoadaptarr:8080/api/{name}` instead of directly at Prowlarr.
+Works for both TV series (Sonarr) and movies (Radarr) — it detects which
+from the Torznab request's `t=` parameter (`tvsearch` vs `movie`) and
+resolves against the matching TMDB endpoint/field. Note that for movies,
+Radarr already has its own automatic TMDB alternative-title matching (see
+above) — kinoadaptarr only adds value there when TMDB itself doesn't have
+the Russian title registered but Kinopoisk does, which is common for niche
+or very recent releases but not universal like it is for series (where
+Sonarr has no such matching at all).
+
+Prowlarr syncs each of its indexers to Sonarr/Radarr as its own separate
+Torznab entry rather than one combined feed, so kinoadaptarr proxies **one
+route per indexer**: `/api/{name}` for each entry under `upstreams:` in its
+config. Point each of Sonarr's/Radarr's existing per-indexer URLs at the
+matching `http://kinoadaptarr:8080/api/{name}` instead of directly at
+Prowlarr.
 
 For every search:
 
