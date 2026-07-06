@@ -2,10 +2,12 @@ port: 8080
 
 # Prowlarr syncs each of its indexers to Sonarr as its own separate Torznab
 # entry (rather than one combined feed) — each entry here becomes a route
-# at /api/{name}. Match these names/paths to whatever indexers Sonarr's
+# at /{name}/api. Match these names/paths to whatever indexers Sonarr's
 # Settings > Indexers page currently shows synced from Prowlarr, and their
 # numbered URL paths (Prowlarr assigns a number per configured app/indexer
-# pair, visible in each indexer's existing URL in Sonarr).
+# pair, visible in each indexer's existing URL in Sonarr). Then set each of
+# Sonarr's indexer URLs to http://kinoadaptarr:8080/{name} (no "/api"
+# suffix — Sonarr appends that itself).
 upstreams:
   kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"
   nonameclub: "http://prowlarr:9696/2/api?apikey=${PROWLARR_API_KEY}&t=search"

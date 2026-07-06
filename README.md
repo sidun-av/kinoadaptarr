@@ -38,10 +38,13 @@ Sonarr has no such matching at all).
 
 Prowlarr syncs each of its indexers to Sonarr/Radarr as its own separate
 Torznab entry rather than one combined feed, so kinoadaptarr proxies **one
-route per indexer**: `/api/{name}` for each entry under `upstreams:` in its
-config. Point each of Sonarr's/Radarr's existing per-indexer URLs at the
-matching `http://kinoadaptarr:8080/api/{name}` instead of directly at
-Prowlarr.
+route per indexer**: `/{name}/api` for each entry under `upstreams:` in its
+config. Sonarr/Radarr's Torznab client always appends a literal `/api`
+segment to whatever base URL an indexer is configured with (that's how the
+original direct-to-Prowlarr URLs worked too), so set each of Sonarr's/
+Radarr's existing per-indexer URLs to `http://kinoadaptarr:8080/{name}`
+(**no** trailing `/api` — Sonarr/Radarr adds that itself) instead of
+pointing directly at Prowlarr.
 
 For every search:
 
@@ -116,9 +119,10 @@ Add it to the same Docker network as Prowlarr.
 
 In Sonarr's Settings > Indexers, edit **each** indexer currently synced from
 Prowlarr and change its URL from `http://prowlarr:9696/{N}/api` to
-`http://kinoadaptarr:8080/api/{name}` — using the matching name you gave it
-under `upstreams:` in kinoadaptarr's config. Leave everything else (API key,
-categories, priority) as Sonarr already has it.
+`http://kinoadaptarr:8080/{name}` (no trailing `/api` — Sonarr adds it
+itself) — using the matching name you gave it under `upstreams:` in
+kinoadaptarr's config. Leave everything else (API key, categories,
+priority) as Sonarr already has it.
 
 ## Configuration reference
 

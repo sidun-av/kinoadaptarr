@@ -36,13 +36,18 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", proxy.HealthzHandler)
 
-	// Prowlarr syncs each of its indexers to Sonarr as a separate Torznab
-	// entry rather than one combined feed, so we register one route per
-	// configured upstream — Sonarr's existing indexer URLs each get
-	// repointed at http://kinoadaptarr:<port>/api/{name}.
+	// Prowlarr syncs each of its indexers to Sonarr/Radarr as a separate
+	// Torznab entry rather than one combined feed, so we register one route
+	// per configured upstream. Sonarr/Radarr's Torznab client always
+	// appends a literal "/api" segment to whatever base URL is configured
+	// for an indexer (that's how the original direct-to-Prowlarr URLs
+	// worked too: base "http://prowlarr:9696/1/" + "/api"), so routes here
+	// are registered at /{name}/api to match — Sonarr's indexer URL should
+	// be set to http://kinoadaptarr:<port>/{name} (no "/api" suffix; Sonarr
+	// adds it itself).
 	for name, upstreamURL := range cfg.Upstreams {
 		handler := proxy.NewHandler(upstreamURL, res, http.DefaultClient)
-		route := "/api/" + name
+		route := "/" + name + "/api"
 		mux.Handle(route, handler)
 		log.Printf("kinoadaptarr: registered %s -> %s", route, upstreamURL)
 	}
