@@ -5,6 +5,8 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
@@ -92,19 +94,49 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i := range rss.Channel.Items {
-		rss.Channel.Items[i].Title = h.Resolver.Resolve(rss.Channel.Items[i].Title, mediaType)
-	}
+	out := rewriteTitles(body, rss.Channel.Items, h.Resolver, mediaType)
 
-	out, err := torznab.Marshal(rss)
-	if err != nil {
-		log.Printf("proxy: failed to marshal rewritten response: %v", err)
-		http.Error(w, "failed to build response", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.Write(out)
+}
+
+// rewriteTitles splices resolved English titles into body in place of each
+// item's original <title> text, without re-serializing the surrounding XML
+// (which Go's encoding/xml cannot do losslessly for namespace declarations
+// — see the torznab package doc comment). Items whose title doesn't change,
+// or whose exact original <title> text can't be located in body (should not
+// happen for well-formed input, but defensively skipped rather than
+// corrupting the response), are left untouched.
+func rewriteTitles(body []byte, items []torznab.Item, res TitleResolver, mediaType resolver.MediaType) []byte {
+	out := body
+	cursor := 0
+	for _, item := range items {
+		original := item.Title()
+		resolved := res.Resolve(original, mediaType)
+		if resolved == original {
+			continue
+		}
+
+		oldTag := []byte("<title>" + item.TitleRaw() + "</title>")
+		idx := bytes.Index(out[cursor:], oldTag)
+		if idx == -1 {
+			continue
+		}
+		absIdx := cursor + idx
+
+		var escaped bytes.Buffer
+		xml.EscapeText(&escaped, []byte(resolved))
+		newTag := []byte("<title>" + escaped.String() + "</title>")
+
+		rebuilt := make([]byte, 0, len(out)-len(oldTag)+len(newTag))
+		rebuilt = append(rebuilt, out[:absIdx]...)
+		rebuilt = append(rebuilt, newTag...)
+		rebuilt = append(rebuilt, out[absIdx+len(oldTag):]...)
+		out = rebuilt
+
+		cursor = absIdx + len(newTag)
+	}
+	return out
 }
 
 // HealthzHandler is a trivial liveness probe.

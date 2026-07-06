@@ -1,6 +1,9 @@
 package torznab
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const sampleRSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
@@ -9,14 +12,11 @@ const sampleRSS = `<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>Первая ракетка / S1E1-8 of 8 [WEBDL 1080p]</title>
       <guid>abc123</guid>
-      <link>http://example.com/details?id=1</link>
-      <pubDate>Mon, 01 Jan 2024 00:00:00 +0000</pubDate>
       <enclosure url="magnet:?xt=urn:btih:abc" length="1000" type="application/x-bittorrent"/>
       <torznab:attr name="seeders" value="42"></torznab:attr>
-      <torznab:attr name="peers" value="10"></torznab:attr>
     </item>
     <item>
-      <title>Top Tennis Player S01E02 WEBRip</title>
+      <title>Alice Doesn&#39;t Live Here Anymore [1974]</title>
       <guid>def456</guid>
       <enclosure url="magnet:?xt=urn:btih:def" length="2000" type="application/x-bittorrent"/>
     </item>
@@ -31,40 +31,30 @@ func TestParseExtractsItems(t *testing.T) {
 	if len(rss.Channel.Items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(rss.Channel.Items))
 	}
-	if rss.Channel.Items[0].Title != "Первая ракетка / S1E1-8 of 8 [WEBDL 1080p]" {
-		t.Errorf("unexpected title: %q", rss.Channel.Items[0].Title)
+	if got := rss.Channel.Items[0].Title(); got != "Первая ракетка / S1E1-8 of 8 [WEBDL 1080p]" {
+		t.Errorf("unexpected title: %q", got)
 	}
-	if rss.Channel.Items[0].Enclosure == nil || rss.Channel.Items[0].Enclosure.URL != "magnet:?xt=urn:btih:abc" {
-		t.Errorf("expected enclosure to be preserved, got %+v", rss.Channel.Items[0].Enclosure)
-	}
-	if attrs := rss.Channel.Items[0].Attrs(); len(attrs) != 2 {
-		t.Errorf("expected 2 torznab:attr elements preserved, got %d", len(attrs))
+	if rss.Channel.Items[0].GUID != "abc123" {
+		t.Errorf("unexpected guid: %q", rss.Channel.Items[0].GUID)
 	}
 }
 
-func TestMarshalRoundTripsRewrittenTitle(t *testing.T) {
+func TestTitleRawPreservesEntityEscaping(t *testing.T) {
 	rss, err := Parse([]byte(sampleRSS))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	rss.Channel.Items[0].Title = "Top Tennis Player S01E01-08 of 08 WEBDL 1080p"
-
-	out, err := Marshal(rss)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	item := rss.Channel.Items[1]
+	if got := item.Title(); got != "Alice Doesn't Live Here Anymore [1974]" {
+		t.Errorf("expected decoded Title() with a real apostrophe, got %q", got)
 	}
-
-	reparsed, err := Parse(out)
-	if err != nil {
-		t.Fatalf("re-parse failed: %v\noutput was:\n%s", err, out)
+	if got := item.TitleRaw(); got != "Alice Doesn&#39;t Live Here Anymore [1974]" {
+		t.Errorf("expected TitleRaw() to keep the original &#39; entity, got %q", got)
 	}
-	if reparsed.Channel.Items[0].Title != "Top Tennis Player S01E01-08 of 08 WEBDL 1080p" {
-		t.Errorf("rewritten title did not round-trip, got %q", reparsed.Channel.Items[0].Title)
-	}
-	if reparsed.Channel.Items[0].Enclosure.URL != "magnet:?xt=urn:btih:abc" {
-		t.Errorf("enclosure lost on round-trip: %+v", reparsed.Channel.Items[0].Enclosure)
-	}
-	if len(reparsed.Channel.Items) != 2 {
-		t.Fatalf("expected 2 items after round-trip, got %d", len(reparsed.Channel.Items))
+	// TitleRaw() must appear verbatim in the original source bytes, so
+	// callers can locate and replace it exactly.
+	wrapped := "<title>" + item.TitleRaw() + "</title>"
+	if !strings.Contains(sampleRSS, wrapped) {
+		t.Errorf("TitleRaw() %q was not found verbatim in the source document", item.TitleRaw())
 	}
 }

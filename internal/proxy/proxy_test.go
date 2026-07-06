@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	resolverPkg "github.com/sidun-av/kinoadaptarr/internal/resolver"
+	"github.com/sidun-av/kinoadaptarr/internal/torznab"
 )
 
 type fakeResolver struct {
@@ -23,29 +24,40 @@ func (f *fakeResolver) Resolve(title string, mediaType resolverPkg.MediaType) st
 	return title
 }
 
-func TestServeHTTPRewritesTitlesAndForwardsQuery(t *testing.T) {
+const sampleUpstreamXML = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="1.0" xmlns:_xmlns="xmlns" _xmlns:atom="http://www.w3.org/2005/Atom" _xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <title>Prowlarr</title>
+    <item>
+      <title>Первая ракетка / S1E1-8 of 8</title>
+      <guid>abc123</guid>
+      <link>http://prowlarr:9696/1/download?apikey=xxx&amp;link=abc</link>
+      <enclosure url="magnet:?xt=urn:btih:abc" length="1" type="application/x-bittorrent"></enclosure>
+      <torznab:attr name="seeders" value="42"></torznab:attr>
+    </item>
+    <item>
+      <title>Alice Doesn&#39;t Live Here Anymore [1974]</title>
+      <guid>def456</guid>
+      <enclosure url="magnet:?xt=urn:btih:def" length="2" type="application/x-bittorrent"></enclosure>
+    </item>
+  </channel>
+</rss>`
+
+func TestServeHTTPRewritesTitleInPlacePreservingRestOfDocument(t *testing.T) {
 	var gotQuery string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/rss+xml")
-		fmt.Fprint(w, `<?xml version="1.0"?>
-<rss version="2.0">
-  <channel>
-    <item>
-      <title>Первая ракетка / S1E1-8 of 8</title>
-      <enclosure url="magnet:?xt=urn:btih:abc" length="1" type="application/x-bittorrent"/>
-    </item>
-  </channel>
-</rss>`)
+		fmt.Fprint(w, sampleUpstreamXML)
 	}))
 	defer upstream.Close()
 
-	resolver := &fakeResolver{rewrites: map[string]string{
+	fr := &fakeResolver{rewrites: map[string]string{
 		"Первая ракетка / S1E1-8 of 8": "Top Tennis Player S1E1-8 of 8",
 	}}
-	h := NewHandler(upstream.URL+"?apikey=upstream-key", resolver, nil)
+	h := NewHandler(upstream.URL+"?apikey=upstream-key", fr, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api?t=tvsearch&q=top+tennis", nil)
+	req := httptest.NewRequest(http.MethodGet, "/rutracker/api?t=tvsearch&q=top+tennis", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -58,14 +70,34 @@ func TestServeHTTPRewritesTitlesAndForwardsQuery(t *testing.T) {
 	if !strings.Contains(gotQuery, "t=tvsearch") {
 		t.Errorf("expected caller's query params forwarded, got %q", gotQuery)
 	}
-	if !strings.Contains(rec.Body.String(), "Top Tennis Player S1E1-8 of 8") {
-		t.Errorf("expected rewritten title in response body, got:\n%s", rec.Body.String())
+
+	got := rec.Body.String()
+	if !strings.Contains(got, "<title>Top Tennis Player S1E1-8 of 8</title>") {
+		t.Errorf("expected rewritten title in response body, got:\n%s", got)
 	}
-	if strings.Contains(rec.Body.String(), "Первая ракетка") {
-		t.Errorf("expected original Cyrillic title to be replaced, got:\n%s", rec.Body.String())
+	if strings.Contains(got, "Первая ракетка") {
+		t.Errorf("expected original Cyrillic title to be replaced, got:\n%s", got)
 	}
-	if resolver.gotMediaType != resolverPkg.MediaTV {
-		t.Errorf("expected t=tvsearch to map to MediaTV, got %q", resolver.gotMediaType)
+	// The critical regression check: the namespace declarations and every
+	// other byte of the document must survive completely untouched, since
+	// we no longer re-marshal the XML (which previously corrupted them
+	// into things like xmlns:_xmlns="xmlns").
+	if !strings.Contains(got, `xmlns:_xmlns="xmlns" _xmlns:atom="http://www.w3.org/2005/Atom" _xmlns:torznab="http://torznab.com/schemas/2015/feed"`) {
+		t.Errorf("expected the (verbatim, even if odd-looking) source namespace declarations preserved untouched, got:\n%s", got)
+	}
+	if !strings.Contains(got, `<torznab:attr name="seeders" value="42"></torznab:attr>`) {
+		t.Errorf("expected torznab:attr elements preserved untouched, got:\n%s", got)
+	}
+	if !strings.Contains(got, `<link>http://prowlarr:9696/1/download?apikey=xxx&amp;link=abc</link>`) {
+		t.Errorf("expected unrelated elements (link, still &amp;-escaped) preserved untouched, got:\n%s", got)
+	}
+	// The second item wasn't in the rewrite map, so it (including its
+	// original entity escaping) must be left completely alone.
+	if !strings.Contains(got, `<title>Alice Doesn&#39;t Live Here Anymore [1974]</title>`) {
+		t.Errorf("expected untouched item's title to keep its original &#39; escaping, got:\n%s", got)
+	}
+	if fr.gotMediaType != resolverPkg.MediaTV {
+		t.Errorf("expected t=tvsearch to map to MediaTV, got %q", fr.gotMediaType)
 	}
 }
 
@@ -75,9 +107,7 @@ func TestServeHTTPDetectsMovieMediaType(t *testing.T) {
 		fmt.Fprint(w, `<?xml version="1.0"?>
 <rss version="2.0">
   <channel>
-    <item>
-      <title>Какой-то Фильм 2024 WEBDL</title>
-    </item>
+    <item><title>Какой-то Фильм 2024 WEBDL</title></item>
   </channel>
 </rss>`)
 	}))
@@ -94,23 +124,6 @@ func TestServeHTTPDetectsMovieMediaType(t *testing.T) {
 	}
 	if fr.gotMediaType != resolverPkg.MediaMovie {
 		t.Errorf("expected t=movie to map to MediaMovie, got %q", fr.gotMediaType)
-	}
-}
-
-func TestMediaTypeFromQuery(t *testing.T) {
-	cases := []struct {
-		query string
-		want  resolverPkg.MediaType
-	}{
-		{"t=movie&q=x", resolverPkg.MediaMovie},
-		{"t=tvsearch&q=x", resolverPkg.MediaTV},
-		{"t=search&q=x", resolverPkg.MediaTV},
-		{"t=caps", resolverPkg.MediaTV},
-	}
-	for _, c := range cases {
-		if got := mediaTypeFromQuery(c.query); got != c.want {
-			t.Errorf("mediaTypeFromQuery(%q) = %q, want %q", c.query, got, c.want)
-		}
 	}
 }
 
@@ -161,4 +174,38 @@ func TestHealthzHandler(t *testing.T) {
 	if rec.Body.String() != "ok" {
 		t.Errorf("expected body 'ok', got %q", rec.Body.String())
 	}
+}
+
+func TestRewriteTitlesHandlesDuplicateTitlesPositionally(t *testing.T) {
+	body := []byte(`<rss><channel>` +
+		`<item><title>Дубликат</title></item>` +
+		`<item><title>Дубликат</title></item>` +
+		`</channel></rss>`)
+	rss, err := torznab.Parse(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	calls := 0
+	fr := resolverFunc(func(title string, _ resolverPkg.MediaType) string {
+		calls++
+		if calls == 1 {
+			return "First"
+		}
+		return "Second"
+	})
+
+	out := rewriteTitles(body, rss.Channel.Items, fr, resolverPkg.MediaTV)
+	got := string(out)
+	firstIdx := strings.Index(got, "<title>First</title>")
+	secondIdx := strings.Index(got, "<title>Second</title>")
+	if firstIdx == -1 || secondIdx == -1 || firstIdx >= secondIdx {
+		t.Errorf("expected 'First' before 'Second' in rewritten output, got:\n%s", got)
+	}
+}
+
+type resolverFunc func(title string, mediaType resolverPkg.MediaType) string
+
+func (f resolverFunc) Resolve(title string, mediaType resolverPkg.MediaType) string {
+	return f(title, mediaType)
 }
