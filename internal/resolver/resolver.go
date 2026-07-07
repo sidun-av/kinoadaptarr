@@ -4,6 +4,7 @@ package resolver
 
 import (
 	"log"
+	"strings"
 
 	"github.com/sidun-av/kinoadaptarr/internal/cache"
 	"github.com/sidun-av/kinoadaptarr/internal/cyrillic"
@@ -27,8 +28,9 @@ type KinopoiskSearcher interface {
 
 // TMDBTitleFetcher is satisfied by *tmdb.Client.
 type TMDBTitleFetcher interface {
-	TVTitle(tmdbID int) (string, error)
+	TVTitle(tmdbID int, language string) (string, error)
 	MovieTitle(tmdbID int) (string, error)
+	SearchTV(title string) (int, error)
 }
 
 // Cache is satisfied by *cache.Cache.
@@ -73,7 +75,7 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	if m, ok, err := r.Cache.Get(cacheKey); err != nil {
 		log.Printf("resolver: cache lookup failed for %q: %v", cacheKey, err)
 	} else if ok {
-		return rewrite.Title(releaseTitle, segment, m.EnglishTitle)
+		return rewrite.Title(releaseTitle, segment, m.ResolvedTitle)
 	}
 
 	kpMatch, err := r.Kinopoisk.Search(segment)
@@ -90,16 +92,58 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	if mediaType == MediaMovie {
 		englishTitle, err = r.TMDB.MovieTitle(kpMatch.ExternalID.TMDB)
 	} else {
-		englishTitle, err = r.TMDB.TVTitle(kpMatch.ExternalID.TMDB)
+		englishTitle, err = r.TMDB.TVTitle(kpMatch.ExternalID.TMDB, "en-US")
 	}
 	if err != nil {
 		log.Printf("resolver: tmdb lookup failed for tmdb id %d (%q): %v", kpMatch.ExternalID.TMDB, segment, err)
 		return releaseTitle
 	}
 
-	if err := r.Cache.Put(cacheKey, cache.Mapping{EnglishTitle: englishTitle, TMDBID: kpMatch.ExternalID.TMDB}); err != nil {
+	if err := r.Cache.Put(cacheKey, cache.Mapping{ResolvedTitle: englishTitle, TMDBID: kpMatch.ExternalID.TMDB}); err != nil {
 		log.Printf("resolver: failed to cache mapping for %q: %v", cacheKey, err)
 	}
 
 	return rewrite.Title(releaseTitle, segment, englishTitle)
+}
+
+// ResolveQuery attempts to translate an English (Sonarr-supplied) TV
+// series search query into its Russian title, for retrying a search that
+// returned zero results against a Russian-language tracker. Returns
+// ("", false) if no translation could be found — callers should treat
+// that as "nothing to retry with", not an error.
+func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
+	cacheKey := "revtv:" + strings.ToLower(strings.TrimSpace(englishQuery))
+
+	if m, ok, err := r.Cache.Get(cacheKey); err != nil {
+		log.Printf("resolver: reverse cache lookup failed for %q: %v", cacheKey, err)
+	} else if ok {
+		return m.ResolvedTitle, true
+	}
+
+	tmdbID, err := r.TMDB.SearchTV(englishQuery)
+	if err != nil {
+		log.Printf("resolver: tmdb search failed for %q: %v", englishQuery, err)
+		return "", false
+	}
+	if tmdbID == 0 {
+		log.Printf("resolver: no tmdb match for query %q", englishQuery)
+		return "", false
+	}
+
+	russianTitle, err := r.TMDB.TVTitle(tmdbID, "ru-RU")
+	if err != nil {
+		log.Printf("resolver: tmdb ru-RU lookup failed for tmdb id %d (query %q): %v", tmdbID, englishQuery, err)
+		return "", false
+	}
+	if russianTitle == englishQuery {
+		// No Russian translation available — TMDB fell back to the same
+		// title we searched with. Nothing useful to retry with.
+		return "", false
+	}
+
+	if err := r.Cache.Put(cacheKey, cache.Mapping{ResolvedTitle: russianTitle, TMDBID: tmdbID}); err != nil {
+		log.Printf("resolver: failed to cache reverse mapping for %q: %v", cacheKey, err)
+	}
+
+	return russianTitle, true
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -12,8 +13,10 @@ import (
 )
 
 type fakeResolver struct {
-	rewrites     map[string]string
-	gotMediaType resolverPkg.MediaType
+	rewrites      map[string]string
+	gotMediaType  resolverPkg.MediaType
+	queryResolves map[string]string
+	gotQueries    []string
 }
 
 func (f *fakeResolver) Resolve(title string, mediaType resolverPkg.MediaType) string {
@@ -22,6 +25,12 @@ func (f *fakeResolver) Resolve(title string, mediaType resolverPkg.MediaType) st
 		return rewritten
 	}
 	return title
+}
+
+func (f *fakeResolver) ResolveQuery(englishQuery string) (string, bool) {
+	f.gotQueries = append(f.gotQueries, englishQuery)
+	ru, ok := f.queryResolves[englishQuery]
+	return ru, ok
 }
 
 const sampleUpstreamXML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -201,6 +210,101 @@ func TestRewriteTitlesHandlesDuplicateTitlesPositionally(t *testing.T) {
 	secondIdx := strings.Index(got, "<title>Second</title>")
 	if firstIdx == -1 || secondIdx == -1 || firstIdx >= secondIdx {
 		t.Errorf("expected 'First' before 'Second' in rewritten output, got:\n%s", got)
+	}
+}
+
+func TestServeHTTPRetriesWithReverseResolvedQueryOnEmptyResult(t *testing.T) {
+	var gotQueries []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQueries = append(gotQueries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/rss+xml")
+		if r.URL.Query().Get("q") == "Top Tennis Player" {
+			fmt.Fprint(w, `<?xml version="1.0"?><rss><channel></channel></rss>`)
+			return
+		}
+		fmt.Fprint(w, `<?xml version="1.0"?>
+<rss><channel>
+  <item><title>Первая ракетка S1E8</title></item>
+</channel></rss>`)
+	}))
+	defer upstream.Close()
+
+	fr := &fakeResolver{
+		rewrites:      map[string]string{"Первая ракетка S1E8": "Top Tennis Player S1E8"},
+		queryResolves: map[string]string{"Top Tennis Player": "Первая ракетка"},
+	}
+	h := NewHandler(upstream.URL, fr, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/rutracker/api?t=tvsearch&season=1&ep=8&q=Top+Tennis+Player", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(gotQueries) != 2 {
+		t.Fatalf("expected 2 upstream requests (original + retry), got %d: %v", len(gotQueries), gotQueries)
+	}
+
+	retryQuery, err := url.ParseQuery(gotQueries[1])
+	if err != nil {
+		t.Fatalf("failed to parse retry query %q: %v", gotQueries[1], err)
+	}
+	if got := retryQuery.Get("q"); got != "Первая ракетка" {
+		t.Errorf("expected retry q=%q, got %q", "Первая ракетка", got)
+	}
+	if retryQuery.Get("season") != "1" || retryQuery.Get("ep") != "8" {
+		t.Errorf("expected season/ep preserved on retry, got %+v", retryQuery)
+	}
+
+	got := rec.Body.String()
+	if !strings.Contains(got, "<title>Top Tennis Player S1E8</title>") {
+		t.Errorf("expected the retried response's item to be present and title-rewritten, got:\n%s", got)
+	}
+}
+
+func TestServeHTTPDoesNotRetryForNonTVSearch(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, `<?xml version="1.0"?><rss><channel></channel></rss>`)
+	}))
+	defer upstream.Close()
+
+	fr := &fakeResolver{queryResolves: map[string]string{"Some Movie": "Какой-то Фильм"}}
+	h := NewHandler(upstream.URL, fr, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api?t=movie&q=Some+Movie", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if callCount != 1 {
+		t.Errorf("expected exactly 1 upstream request for a movie search (no reverse-query retry), got %d", callCount)
+	}
+}
+
+func TestServeHTTPFallsBackWhenNoReverseResolutionFound(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, `<?xml version="1.0"?><rss><channel></channel></rss>`)
+	}))
+	defer upstream.Close()
+
+	fr := &fakeResolver{} // queryResolves is nil: ResolveQuery always returns ok=false
+	h := NewHandler(upstream.URL, fr, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/rutracker/api?t=tvsearch&q=Unknown+Show", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("expected exactly 1 upstream request when no reverse resolution is found, got %d", callCount)
 	}
 }
 

@@ -32,16 +32,53 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
-// TVTitle returns the canonical English title (en-US locale) for the TV
-// series with the given TMDB ID.
-func (c *Client) TVTitle(tmdbID int) (string, error) {
-	return c.titleField(fmt.Sprintf("%s/tv/%d?language=en-US", c.BaseURL, tmdbID), "name")
+// TVTitle returns the canonical title for the TV series with the given
+// TMDB ID, localized to language (e.g. "en-US", "ru-RU").
+func (c *Client) TVTitle(tmdbID int, language string) (string, error) {
+	return c.titleField(fmt.Sprintf("%s/tv/%d?language=%s", c.BaseURL, tmdbID, url.QueryEscape(language)), "name")
 }
 
 // MovieTitle returns the canonical English title (en-US locale) for the
 // movie with the given TMDB ID.
 func (c *Client) MovieTitle(tmdbID int) (string, error) {
 	return c.titleField(fmt.Sprintf("%s/movie/%d?language=en-US", c.BaseURL, tmdbID), "title")
+}
+
+// SearchTV searches TMDB for a TV series by title text and returns the
+// first (best) match's TMDB ID. Returns (0, nil) if the search found no
+// results — treated as a lookup miss, not an error, by callers.
+func (c *Client) SearchTV(title string) (int, error) {
+	u := fmt.Sprintf("%s/search/tv?query=%s&api_key=%s", c.BaseURL, url.QueryEscape(title), url.QueryEscape(c.APIKey))
+
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return 0, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("tmdb search request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("tmdb search returned status %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Results []struct {
+			ID int `json:"id"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return 0, fmt.Errorf("decode tmdb search response: %w", err)
+	}
+
+	if len(parsed.Results) == 0 {
+		return 0, nil
+	}
+	return parsed.Results[0].ID, nil
 }
 
 // titleField fetches u and extracts the named top-level JSON string field

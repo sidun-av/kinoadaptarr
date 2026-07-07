@@ -11,15 +11,27 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/sidun-av/kinoadaptarr/internal/resolver"
 	"github.com/sidun-av/kinoadaptarr/internal/torznab"
 )
 
+// itemTitleResolver is the narrow dependency rewriteTitles needs — just
+// enough to resolve one item's title. TitleResolver (below) is a superset,
+// satisfied by *resolver.Resolver.
+type itemTitleResolver interface {
+	Resolve(releaseTitle string, mediaType resolver.MediaType) string
+}
+
 // TitleResolver is satisfied by *resolver.Resolver.
 type TitleResolver interface {
-	Resolve(releaseTitle string, mediaType resolver.MediaType) string
+	itemTitleResolver
+	// ResolveQuery translates an English TV search query to its Russian
+	// title, for retrying a search that returned zero results. ok is false
+	// if no translation could be found.
+	ResolveQuery(englishQuery string) (russianTitle string, ok bool)
 }
 
 // Handler proxies Torznab requests to an upstream indexer aggregator
@@ -63,41 +75,125 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	mediaType := mediaTypeFromQuery(r.URL.RawQuery)
 
-	resp, err := h.HTTPClient.Get(upstream)
+	result, err := h.fetch(upstream)
 	if err != nil {
 		log.Printf("proxy: upstream request failed: %v", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("proxy: failed to read upstream body: %v", err)
-		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+	if result.statusCode != http.StatusOK {
+		w.WriteHeader(result.statusCode)
+		w.Write(result.body)
 		return
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		w.Write(body)
-		return
-	}
-
-	rss, err := torznab.Parse(body)
+	rss, err := torznab.Parse(result.body)
 	if err != nil {
 		// Not parseable as Torznab XML (could be an error page, or a
 		// caps/non-search request) — pass it through unchanged rather than
 		// failing the whole request.
-		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
-		w.Write(body)
+		w.Header().Set("Content-Type", result.header.Get("Content-Type"))
+		w.Write(result.body)
 		return
 	}
 
-	out := rewriteTitles(body, rss.Channel.Items, h.Resolver, mediaType)
+	if len(rss.Channel.Items) == 0 {
+		if retried, ok := h.retryWithReverseResolvedQuery(r, upstream); ok {
+			result = retried.result
+			rss = retried.rss
+		}
+	}
 
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	out := rewriteTitles(result.body, rss.Channel.Items, h.Resolver, mediaType)
+
+	w.Header().Set("Content-Type", result.header.Get("Content-Type"))
 	w.Write(out)
+}
+
+// fetchResult holds the pieces of an upstream response ServeHTTP needs.
+type fetchResult struct {
+	body       []byte
+	statusCode int
+	header     http.Header
+}
+
+// fetch performs a GET against upstream and reads the full body.
+func (h *Handler) fetch(upstream string) (*fetchResult, error) {
+	resp, err := h.HTTPClient.Get(upstream)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &fetchResult{body: body, statusCode: resp.StatusCode, header: resp.Header}, nil
+}
+
+// retriedFetch is the outcome of a successful reverse-query retry.
+type retriedFetch struct {
+	result *fetchResult
+	rss    *torznab.RSS
+}
+
+// retryWithReverseResolvedQuery re-issues a t=tvsearch request with q
+// translated to its Russian equivalent, for the case where the original
+// (English) query found nothing. Returns ok=false if this isn't a
+// tvsearch request, q is empty, no translation was found, the retry
+// request itself failed, or the retry also came back with zero items —
+// in every one of those cases the caller should keep using the original
+// (empty) result.
+func (h *Handler) retryWithReverseResolvedQuery(r *http.Request, upstream string) (*retriedFetch, bool) {
+	if r.URL.Query().Get("t") != "tvsearch" {
+		return nil, false
+	}
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		return nil, false
+	}
+
+	russianQuery, ok := h.Resolver.ResolveQuery(q)
+	if !ok {
+		return nil, false
+	}
+
+	retryURL, err := replaceQueryParam(upstream, "q", russianQuery)
+	if err != nil {
+		log.Printf("proxy: failed to build retry URL: %v", err)
+		return nil, false
+	}
+
+	result, err := h.fetch(retryURL)
+	if err != nil {
+		log.Printf("proxy: retry upstream request failed: %v", err)
+		return nil, false
+	}
+	if result.statusCode != http.StatusOK {
+		return nil, false
+	}
+
+	rss, err := torznab.Parse(result.body)
+	if err != nil || len(rss.Channel.Items) == 0 {
+		return nil, false
+	}
+
+	return &retriedFetch{result: result, rss: rss}, true
+}
+
+// replaceQueryParam returns rawURL with the query parameter name set to
+// value, preserving every other parameter and the base URL untouched.
+func replaceQueryParam(rawURL, name, value string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set(name, value)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // rewriteTitles splices resolved English titles into body in place of each
@@ -107,7 +203,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // or whose exact original <title> text can't be located in body (should not
 // happen for well-formed input, but defensively skipped rather than
 // corrupting the response), are left untouched.
-func rewriteTitles(body []byte, items []torznab.Item, res TitleResolver, mediaType resolver.MediaType) []byte {
+func rewriteTitles(body []byte, items []torznab.Item, res itemTitleResolver, mediaType resolver.MediaType) []byte {
 	out := body
 	cursor := 0
 	for _, item := range items {
