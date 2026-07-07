@@ -10,10 +10,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Mapping is a resolved title translation.
+// Mapping is a resolved title translation. EnglishTitle holds the
+// canonical English title for forward (Cyrillic -> English) lookups, or
+// the Russian title for reverse (English query -> Russian) lookups — the
+// field name reflects the more common forward direction.
 type Mapping struct {
-	EnglishTitle string
-	TMDBID       int
+	ResolvedTitle string
+	TMDBID        int
 }
 
 // Cache is a SQLite-backed store of resolved title mappings, keyed by the
@@ -54,7 +57,7 @@ func (c *Cache) Get(key string) (*Mapping, bool, error) {
 	err := c.db.QueryRow(
 		`SELECT english_title, tmdb_id FROM title_mappings WHERE cyrillic_key = ?`,
 		key,
-	).Scan(&m.EnglishTitle, &m.TMDBID)
+	).Scan(&m.ResolvedTitle, &m.TMDBID)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -73,7 +76,7 @@ func (c *Cache) Put(key string, m Mapping) error {
 			english_title = excluded.english_title,
 			tmdb_id = excluded.tmdb_id,
 			resolved_at = CURRENT_TIMESTAMP
-	`, key, m.EnglishTitle, m.TMDBID)
+	`, key, m.ResolvedTitle, m.TMDBID)
 	if err != nil {
 		return fmt.Errorf("insert mapping: %w", err)
 	}

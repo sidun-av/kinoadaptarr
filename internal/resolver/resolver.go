@@ -73,7 +73,7 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	if m, ok, err := r.Cache.Get(cacheKey); err != nil {
 		log.Printf("resolver: cache lookup failed for %q: %v", cacheKey, err)
 	} else if ok {
-		return rewrite.Title(releaseTitle, segment, m.EnglishTitle)
+		return rewrite.Title(releaseTitle, segment, m.ResolvedTitle)
 	}
 
 	kpMatch, err := r.Kinopoisk.Search(segment)
@@ -97,7 +97,7 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 		return releaseTitle
 	}
 
-	if err := r.Cache.Put(cacheKey, cache.Mapping{EnglishTitle: englishTitle, TMDBID: kpMatch.ExternalID.TMDB}); err != nil {
+	if err := r.Cache.Put(cacheKey, cache.Mapping{ResolvedTitle: englishTitle, TMDBID: kpMatch.ExternalID.TMDB}); err != nil {
 		log.Printf("resolver: failed to cache mapping for %q: %v", cacheKey, err)
 	}
 

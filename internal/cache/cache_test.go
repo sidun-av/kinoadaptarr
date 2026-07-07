@@ -29,7 +29,7 @@ func TestGetMissReturnsFalse(t *testing.T) {
 
 func TestPutThenGetRoundTrips(t *testing.T) {
 	c := openTestCache(t)
-	want := Mapping{EnglishTitle: "Top Tennis Player", TMDBID: 123456}
+	want := Mapping{ResolvedTitle: "Top Tennis Player", TMDBID: 123456}
 
 	if err := c.Put("Первая ракетка", want); err != nil {
 		t.Fatalf("Put() failed: %v", err)
@@ -42,17 +42,17 @@ func TestPutThenGetRoundTrips(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok=true after Put()")
 	}
-	if got.EnglishTitle != want.EnglishTitle || got.TMDBID != want.TMDBID {
+	if got.ResolvedTitle != want.ResolvedTitle || got.TMDBID != want.TMDBID {
 		t.Errorf("Get() = %+v, want %+v", got, want)
 	}
 }
 
 func TestPutOverwritesExistingKey(t *testing.T) {
 	c := openTestCache(t)
-	if err := c.Put("key", Mapping{EnglishTitle: "Old Title", TMDBID: 1}); err != nil {
+	if err := c.Put("key", Mapping{ResolvedTitle: "Old Title", TMDBID: 1}); err != nil {
 		t.Fatalf("first Put() failed: %v", err)
 	}
-	if err := c.Put("key", Mapping{EnglishTitle: "New Title", TMDBID: 2}); err != nil {
+	if err := c.Put("key", Mapping{ResolvedTitle: "New Title", TMDBID: 2}); err != nil {
 		t.Fatalf("second Put() failed: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestPutOverwritesExistingKey(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Get() failed: ok=%v err=%v", ok, err)
 	}
-	if got.EnglishTitle != "New Title" || got.TMDBID != 2 {
+	if got.ResolvedTitle != "New Title" || got.TMDBID != 2 {
 		t.Errorf("Get() = %+v, want overwritten mapping", got)
 	}
 }
