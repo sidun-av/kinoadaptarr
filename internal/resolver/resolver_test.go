@@ -25,10 +25,12 @@ type fakeTMDB struct {
 	err            error
 	tvCallCount    int
 	movieCallCount int
+	gotLanguage    string
 }
 
-func (f *fakeTMDB) TVTitle(tmdbID int) (string, error) {
+func (f *fakeTMDB) TVTitle(tmdbID int, language string) (string, error) {
 	f.tvCallCount++
+	f.gotLanguage = language
 	return f.tvTitle, f.err
 }
 

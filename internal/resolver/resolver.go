@@ -27,7 +27,7 @@ type KinopoiskSearcher interface {
 
 // TMDBTitleFetcher is satisfied by *tmdb.Client.
 type TMDBTitleFetcher interface {
-	TVTitle(tmdbID int) (string, error)
+	TVTitle(tmdbID int, language string) (string, error)
 	MovieTitle(tmdbID int) (string, error)
 }
 
@@ -90,7 +90,7 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	if mediaType == MediaMovie {
 		englishTitle, err = r.TMDB.MovieTitle(kpMatch.ExternalID.TMDB)
 	} else {
-		englishTitle, err = r.TMDB.TVTitle(kpMatch.ExternalID.TMDB)
+		englishTitle, err = r.TMDB.TVTitle(kpMatch.ExternalID.TMDB, "en-US")
 	}
 	if err != nil {
 		log.Printf("resolver: tmdb lookup failed for tmdb id %d (%q): %v", kpMatch.ExternalID.TMDB, segment, err)
