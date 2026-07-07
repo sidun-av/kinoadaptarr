@@ -77,7 +77,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.fetch(upstream)
 	if err != nil {
-		log.Printf("proxy: upstream request failed: %v", err)
+		log.Printf("proxy: %v", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
@@ -118,17 +118,20 @@ type fetchResult struct {
 	header     http.Header
 }
 
-// fetch performs a GET against upstream and reads the full body.
+// fetch performs a GET against upstream and reads the full body. Errors
+// are wrapped with distinct context (transport failure vs. a body-read
+// failure after a successful connection) so callers' logs can tell them
+// apart.
 func (h *Handler) fetch(upstream string) (*fetchResult, error) {
 	resp, err := h.HTTPClient.Get(upstream)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read upstream body: %w", err)
 	}
 	return &fetchResult{body: body, statusCode: resp.StatusCode, header: resp.Header}, nil
 }
@@ -168,7 +171,7 @@ func (h *Handler) retryWithReverseResolvedQuery(r *http.Request, upstream string
 
 	result, err := h.fetch(retryURL)
 	if err != nil {
-		log.Printf("proxy: retry upstream request failed: %v", err)
+		log.Printf("proxy: retry: %v", err)
 		return nil, false
 	}
 	if result.statusCode != http.StatusOK {

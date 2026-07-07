@@ -46,29 +46,24 @@ func (c *Client) MovieTitle(tmdbID int) (string, error) {
 
 // SearchTV searches TMDB for a TV series by title text and returns the
 // first (best) match's TMDB ID. Returns (0, nil) if the search found no
-// results — treated as a lookup miss, not an error, by callers.
+// results, or if the top result's own name doesn't match title (a
+// same-name-different-show mismatch is far more likely than a genuine
+// need for fuzzy matching here, since title is always an exact
+// TVDB/TMDB-registered series name, not free-form user input) — both
+// cases are treated as a lookup miss, not an error, by callers.
 func (c *Client) SearchTV(title string) (int, error) {
 	u := fmt.Sprintf("%s/search/tv?query=%s&api_key=%s", c.BaseURL, url.QueryEscape(title), url.QueryEscape(c.APIKey))
 
-	req, err := http.NewRequest(http.MethodGet, u, nil)
+	resp, err := c.doRequest(u)
 	if err != nil {
-		return 0, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("tmdb search request: %w", err)
+		return 0, fmt.Errorf("tmdb search: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("tmdb search returned status %d", resp.StatusCode)
-	}
-
 	var parsed struct {
 		Results []struct {
-			ID int `json:"id"`
+			ID   int    `json:"id"`
+			Name string `json:"name"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -78,36 +73,50 @@ func (c *Client) SearchTV(title string) (int, error) {
 	if len(parsed.Results) == 0 {
 		return 0, nil
 	}
-	return parsed.Results[0].ID, nil
+	top := parsed.Results[0]
+	if !strings.EqualFold(strings.TrimSpace(top.Name), strings.TrimSpace(title)) {
+		return 0, nil
+	}
+	return top.ID, nil
+}
+
+// doRequest issues an authenticated GET to u and returns the response if
+// it succeeded with a 200 status — the caller is responsible for closing
+// resp.Body. Uses the v3 "API Key" (api_key query param), not the v4 Read
+// Access Token (which would instead need an "Authorization: Bearer"
+// header) — v3 keys are what TMDB's settings page surfaces by default.
+func (c *Client) doRequest(u string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("returned status %d", resp.StatusCode)
+	}
+	return resp, nil
 }
 
 // titleField fetches u and extracts the named top-level JSON string field
 // (TMDB names it "name" for TV series and "title" for movies).
 func (c *Client) titleField(u, field string) (string, error) {
-	// Uses the v3 "API Key" (api_key query param), not the v4 Read Access
-	// Token (which would instead need an "Authorization: Bearer" header) —
-	// v3 keys are what TMDB's settings page surfaces by default.
 	sep := "?"
 	if strings.Contains(u, "?") {
 		sep = "&"
 	}
 	u += sep + "api_key=" + url.QueryEscape(c.APIKey)
 
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.doRequest(u)
 	if err != nil {
 		return "", fmt.Errorf("tmdb request: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("tmdb returned status %d", resp.StatusCode)
-	}
 
 	var parsed map[string]json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {

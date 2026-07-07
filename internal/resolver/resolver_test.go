@@ -272,3 +272,57 @@ func TestResolveQueryReturnsFalseWhenNoRussianTranslationExists(t *testing.T) {
 		t.Error("expected ok=false when TMDB's ru-RU title falls back to the same English text")
 	}
 }
+
+func TestResolveQueryReturnsFalseWhenTMDBFallbackDiffersButIsStillNotRussian(t *testing.T) {
+	// TMDB's ru-RU fallback need not be byte-identical to the query (e.g.
+	// it could include a subtitle or differ in punctuation) — the check
+	// must catch "not actually Russian" via script detection, not via
+	// exact string equality against the original query.
+	tm := &fakeTMDB{searchID: 999, tvTitle: "Top Tennis Player (Original)"}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false when TMDB's ru-RU fallback is non-Russian even if it differs from the query")
+	}
+}
+
+func TestResolveQueryCachesNegativeResultOnSearchMiss(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	r.ResolveQuery("Some Unknown Show")
+	if _, ok := r.ResolveQuery("Some Unknown Show"); ok {
+		t.Error("expected ok=false on the cached second call")
+	}
+	if tm.searchCallCount != 1 {
+		t.Errorf("expected the second call to be served from the negative cache (no repeat TMDB search), got %d search calls", tm.searchCallCount)
+	}
+}
+
+func TestResolveQueryCachesNegativeResultWhenNoRussianTranslationExists(t *testing.T) {
+	tm := &fakeTMDB{searchID: 999, tvTitle: "Top Tennis Player"}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	r.ResolveQuery("Top Tennis Player")
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false on the cached second call")
+	}
+	if tm.searchCallCount != 1 || tm.tvCallCount != 1 {
+		t.Errorf("expected the second call to be served from the negative cache, got search=%d tv=%d", tm.searchCallCount, tm.tvCallCount)
+	}
+}
+
+func TestResolveQueryDoesNotCacheTransientSearchError(t *testing.T) {
+	tm := &fakeTMDB{searchErr: errors.New("tmdb search down")}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	r.ResolveQuery("Top Tennis Player")
+	tm.searchErr = nil
+	tm.searchID = 999
+	tm.tvTitle = "Первая ракетка"
+
+	got, ok := r.ResolveQuery("Top Tennis Player")
+	if !ok || got != "Первая ракетка" {
+		t.Errorf("expected a transient search error not to be cached, so a later successful call still resolves; got (%q, %v)", got, ok)
+	}
+}

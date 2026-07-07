@@ -132,7 +132,7 @@ func TestSearchTVReturnsFirstResultID(t *testing.T) {
 			t.Errorf("expected path /search/tv, got %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"results": [{"id": 999}, {"id": 111}]}`)
+		fmt.Fprint(w, `{"results": [{"id": 999, "name": "Top Tennis Player"}, {"id": 111, "name": "Unrelated Show"}]}`)
 	}))
 	defer srv.Close()
 
@@ -143,6 +143,23 @@ func TestSearchTVReturnsFirstResultID(t *testing.T) {
 	}
 	if id != 999 {
 		t.Errorf("expected first result's id 999, got %d", id)
+	}
+}
+
+func TestSearchTVReturnsZeroWhenTopResultNameDoesNotMatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"results": [{"id": 999, "name": "A Completely Different Show"}]}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-token")
+	id, err := c.SearchTV("Top Tennis Player")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != 0 {
+		t.Errorf("expected id 0 when the top result's name doesn't match the query, got %d", id)
 	}
 }
 

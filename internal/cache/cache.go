@@ -10,10 +10,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Mapping is a resolved title translation. EnglishTitle holds the
+// Mapping is a resolved title translation. ResolvedTitle holds the
 // canonical English title for forward (Cyrillic -> English) lookups, or
-// the Russian title for reverse (English query -> Russian) lookups — the
-// field name reflects the more common forward direction.
+// the Russian title for reverse (English query -> Russian) lookups.
 type Mapping struct {
 	ResolvedTitle string
 	TMDBID        int
@@ -32,6 +31,11 @@ func Open(path string) (*Cache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite db: %w", err)
 	}
+	// english_title predates the reverse (English -> Russian) direction
+	// and now also holds Russian text for "revtv:"-prefixed keys; kept
+	// as-is rather than renamed, since that would need a migration for
+	// already-deployed databases for what's purely a private, internal
+	// column name.
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS title_mappings (
 			cyrillic_key  TEXT PRIMARY KEY,

@@ -117,6 +117,11 @@ func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 	if m, ok, err := r.Cache.Get(cacheKey); err != nil {
 		log.Printf("resolver: reverse cache lookup failed for %q: %v", cacheKey, err)
 	} else if ok {
+		if m.ResolvedTitle == "" {
+			// A cached negative result (deliberately stored below) — a
+			// prior lookup determined there's nothing to retry with.
+			return "", false
+		}
 		return m.ResolvedTitle, true
 	}
 
@@ -127,6 +132,7 @@ func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 	}
 	if tmdbID == 0 {
 		log.Printf("resolver: no tmdb match for query %q", englishQuery)
+		r.cacheNegative(cacheKey, 0)
 		return "", false
 	}
 
@@ -135,9 +141,14 @@ func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 		log.Printf("resolver: tmdb ru-RU lookup failed for tmdb id %d (query %q): %v", tmdbID, englishQuery, err)
 		return "", false
 	}
-	if russianTitle == englishQuery {
-		// No Russian translation available — TMDB fell back to the same
-		// title we searched with. Nothing useful to retry with.
+	if !cyrillic.HasCyrillic(russianTitle) {
+		// No Russian translation available — TMDB fell back to a
+		// non-Russian (e.g. its own en-US/original) name instead. Checking
+		// for Cyrillic content, rather than comparing against englishQuery
+		// verbatim, correctly catches this even when TMDB's fallback text
+		// differs from the exact query Sonarr sent.
+		log.Printf("resolver: no russian translation for tmdb id %d (query %q)", tmdbID, englishQuery)
+		r.cacheNegative(cacheKey, tmdbID)
 		return "", false
 	}
 
@@ -146,4 +157,16 @@ func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 	}
 
 	return russianTitle, true
+}
+
+// cacheNegative records that cacheKey deterministically has nothing to
+// retry with (no TMDB match, or no Russian translation), so future calls
+// skip straight to a cache hit instead of re-querying TMDB. Only called
+// for deterministic misses — a transient error (network failure, TMDB
+// outage) is never cached here, since it might succeed on a later
+// attempt.
+func (r *Resolver) cacheNegative(cacheKey string, tmdbID int) {
+	if err := r.Cache.Put(cacheKey, cache.Mapping{ResolvedTitle: "", TMDBID: tmdbID}); err != nil {
+		log.Printf("resolver: failed to cache negative reverse mapping for %q: %v", cacheKey, err)
+	}
 }
