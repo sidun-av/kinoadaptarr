@@ -33,7 +33,7 @@ tmdb:
 	if cfg.Port != 8080 {
 		t.Errorf("expected default port 8080, got %d", cfg.Port)
 	}
-	if cfg.Kinopoisk.BaseURL != "https://api.kinopoisk.dev" {
+	if cfg.Kinopoisk.BaseURL != "https://api.poiskkino.dev" {
 		t.Errorf("unexpected kinopoisk base url: %q", cfg.Kinopoisk.BaseURL)
 	}
 	if cfg.TMDB.BaseURL != "https://api.themoviedb.org/3" {

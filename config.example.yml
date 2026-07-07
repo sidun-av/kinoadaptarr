@@ -9,15 +9,15 @@ port: 8080
 # Sonarr's indexer URLs to http://kinoadaptarr:8080/{name} (no "/api"
 # suffix — Sonarr appends that itself).
 upstreams:
-  kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"
-  nonameclub: "http://prowlarr:9696/2/api?apikey=${PROWLARR_API_KEY}&t=search"
-  nonameclubl: "http://prowlarr:9696/3/api?apikey=${PROWLARR_API_KEY}&t=search"
-  rutracker: "http://prowlarr:9696/5/api?apikey=${PROWLARR_API_KEY}&t=search"
+  kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}"
+  nonameclub: "http://prowlarr:9696/2/api?apikey=${PROWLARR_API_KEY}"
+  nonameclubl: "http://prowlarr:9696/3/api?apikey=${PROWLARR_API_KEY}"
+  rutracker: "http://prowlarr:9696/5/api?apikey=${PROWLARR_API_KEY}"
 
 kinopoisk:
   # Free tier at https://poiskkino.dev/ (200 requests/day) — plenty for a
   # home library with caching enabled.
-  base_url: "https://api.kinopoisk.dev"
+  base_url: "https://api.poiskkino.dev"
   api_key: "${KINOPOISK_API_KEY}"
 
 tmdb:

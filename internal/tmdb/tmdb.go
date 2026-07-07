@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -45,11 +47,19 @@ func (c *Client) MovieTitle(tmdbID int) (string, error) {
 // titleField fetches u and extracts the named top-level JSON string field
 // (TMDB names it "name" for TV series and "title" for movies).
 func (c *Client) titleField(u, field string) (string, error) {
+	// Uses the v3 "API Key" (api_key query param), not the v4 Read Access
+	// Token (which would instead need an "Authorization: Bearer" header) —
+	// v3 keys are what TMDB's settings page surfaces by default.
+	sep := "?"
+	if strings.Contains(u, "?") {
+		sep = "&"
+	}
+	u += sep + "api_key=" + url.QueryEscape(c.APIKey)
+
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.HTTPClient.Do(req)

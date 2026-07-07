@@ -19,7 +19,7 @@ type Client struct {
 }
 
 // New returns a Client with a sane default timeout. baseURL should be the
-// API root, e.g. "https://api.kinopoisk.dev" (no trailing slash).
+// API root, e.g. "https://api.poiskkino.dev" (no trailing slash).
 func New(baseURL, apiKey string) *Client {
 	return &Client{
 		BaseURL: baseURL,

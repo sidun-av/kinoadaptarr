@@ -78,7 +78,7 @@ obscure/very-recent case, not eliminates it entirely.
 - **Kinopoisk**: free tier (200 requests/day) at
   [poiskkino.dev](https://poiskkino.dev/) — plenty for a home library with
   caching enabled.
-- **TMDB**: free API key from
+- **TMDB**: free "API Key" (the v3 key, not the v4 "Read Access Token") from
   [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api).
 
 ### 2. Configure
@@ -89,7 +89,9 @@ Copy [`config.example.yml`](config.example.yml) to `config.yml` and edit:
   Prowlarr. Find each one's existing URL in Sonarr's Settings > Indexers
   page (each shows a path like `http://prowlarr:9696/1/api?apikey=...` —
   the number differs per indexer/app pair) and add a matching named entry
-  here, e.g. `kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}&t=search"`.
+  here, e.g. `kinozal: "http://prowlarr:9696/1/api?apikey=${PROWLARR_API_KEY}"`.
+  Don't add a `t=...` param — Sonarr/Radarr always send their own on every
+  request.
 - `kinopoisk.api_key`, `tmdb.api_key` — from step 1.
 
 ### 3. Run it alongside Prowlarr
@@ -130,7 +132,7 @@ priority) as Sonarr already has it.
 |---|---|---|
 | `port` | `8080` | Port the HTTP server listens on |
 | `upstreams.<name>` | — (at least one required) | Full Torznab URL for one Prowlarr-synced indexer, including its own `apikey`. Exposed at `/api/<name>` |
-| `kinopoisk.base_url` | `https://api.kinopoisk.dev` | Kinopoisk API root |
+| `kinopoisk.base_url` | `https://api.poiskkino.dev` | Kinopoisk API root |
 | `kinopoisk.api_key` | — (required) | Kinopoisk API key |
 | `tmdb.base_url` | `https://api.themoviedb.org/3` | TMDB API root |
 | `tmdb.api_key` | — (required) | TMDB API key |

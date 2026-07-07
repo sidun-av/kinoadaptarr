@@ -15,7 +15,15 @@ type Config struct {
 	// Upstreams maps a route name (used as /api/{name}) to the full Torznab
 	// endpoint for one Prowlarr-synced indexer, including its own apikey
 	// query parameter, e.g.
-	// kinozal: "http://prowlarr:9696/1/api?apikey=xxxx&t=search"
+	// kinozal: "http://prowlarr:9696/1/api?apikey=xxxx"
+	//
+	// Don't bake a "t=..." param into this URL: Sonarr/Radarr always send
+	// their own "t=" (caps, tvsearch, movie, search) on every request, and
+	// ServeHTTP appends the caller's raw query string verbatim onto this
+	// upstream URL — a hardcoded "t=search" here would produce a duplicate,
+	// conflicting "t" parameter that Prowlarr rejects with a 404 for
+	// anything other than plain search (e.g. the caps request Sonarr sends
+	// when testing an indexer).
 	//
 	// Prowlarr syncs each of its indexers to Sonarr as a separate Torznab
 	// entry (rather than one combined feed), so each one needs its own
@@ -69,7 +77,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Port = 8080
 	}
 	if cfg.Kinopoisk.BaseURL == "" {
-		cfg.Kinopoisk.BaseURL = "https://api.kinopoisk.dev"
+		cfg.Kinopoisk.BaseURL = "https://api.poiskkino.dev"
 	}
 	if cfg.TMDB.BaseURL == "" {
 		cfg.TMDB.BaseURL = "https://api.themoviedb.org/3"

@@ -9,8 +9,8 @@ import (
 
 func TestTVTitleReturnsName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
-			t.Errorf("expected Bearer auth header, got %q", got)
+		if got := r.URL.Query().Get("api_key"); got != "test-token" {
+			t.Errorf("expected api_key query param, got %q", got)
 		}
 		if r.URL.Path != "/tv/123456" {
 			t.Errorf("expected path /tv/123456, got %q", r.URL.Path)
