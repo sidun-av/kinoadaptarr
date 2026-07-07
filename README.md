@@ -71,6 +71,25 @@ If Kinopoisk or TMDB has no match for a title, it's passed through
 unchanged and logged — this reduces manual curation to the rare, truly
 obscure/very-recent case, not eliminates it entirely.
 
+### TV search fallback
+
+The above only helps once a search has actually returned something. Most
+Russian trackers' Torznab search only supports plain-text `q` (no
+`tvdbid`), and Sonarr always searches using its English/TVDB-registered
+series title — so a Russian-original series whose only TVDB entry is an
+English translation (e.g. `Первая ракетка` registered as `Top Tennis
+Player`) would never be found by search at all, since that English text
+never appears anywhere in the tracker's own release titles.
+
+To fix this, `t=tvsearch` requests that come back with zero results are
+retried once: kinoadaptarr translates `q` to its Russian equivalent via
+TMDB (a text search by `q`, then a `ru-RU`-localized title for the
+matched TMDB ID) and re-issues the same search with that instead. If no
+Russian title can be resolved, or the retry also finds nothing, the
+original (empty) result is returned unchanged — this can only turn some
+zero-result searches into successful ones, never make anything worse.
+Movie search (Radarr) doesn't have this fallback yet.
+
 ## Setup
 
 ### 1. Get API keys
