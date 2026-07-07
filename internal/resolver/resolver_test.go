@@ -26,6 +26,11 @@ type fakeTMDB struct {
 	tvCallCount    int
 	movieCallCount int
 	gotLanguage    string
+
+	searchID        int
+	searchErr       error
+	searchCallCount int
+	gotSearchQuery  string
 }
 
 func (f *fakeTMDB) TVTitle(tmdbID int, language string) (string, error) {
@@ -37,6 +42,12 @@ func (f *fakeTMDB) TVTitle(tmdbID int, language string) (string, error) {
 func (f *fakeTMDB) MovieTitle(tmdbID int) (string, error) {
 	f.movieCallCount++
 	return f.movieTitle, f.err
+}
+
+func (f *fakeTMDB) SearchTV(title string) (int, error) {
+	f.searchCallCount++
+	f.gotSearchQuery = title
+	return f.searchID, f.searchErr
 }
 
 type fakeCache struct {
@@ -186,5 +197,78 @@ func TestResolveReturnsOriginalOnTMDBError(t *testing.T) {
 	in := "Первая ракетка Сезон 1"
 	if got := r.Resolve(in, MediaTV); got != in {
 		t.Errorf("Resolve() = %q, want unchanged %q on a tmdb error", got, in)
+	}
+}
+
+func TestResolveQueryReturnsRussianTitleOnFullLookupChain(t *testing.T) {
+	tm := &fakeTMDB{searchID: 999, tvTitle: "Первая ракетка"}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	got, ok := r.ResolveQuery("Top Tennis Player")
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got != "Первая ракетка" {
+		t.Errorf("ResolveQuery() = %q, want %q", got, "Первая ракетка")
+	}
+	if tm.gotSearchQuery != "Top Tennis Player" {
+		t.Errorf("expected search query %q, got %q", "Top Tennis Player", tm.gotSearchQuery)
+	}
+	if tm.gotLanguage != "ru-RU" {
+		t.Errorf("expected ru-RU language, got %q", tm.gotLanguage)
+	}
+}
+
+func TestResolveQueryUsesCacheOnSecondCall(t *testing.T) {
+	tm := &fakeTMDB{searchID: 999, tvTitle: "Первая ракетка"}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	first, _ := r.ResolveQuery("Top Tennis Player")
+	second, _ := r.ResolveQuery("Top Tennis Player")
+
+	if first != second {
+		t.Errorf("expected identical results, got %q then %q", first, second)
+	}
+	if tm.searchCallCount != 1 || tm.tvCallCount != 1 {
+		t.Errorf("expected the second call to hit the cache, got search=%d tv=%d", tm.searchCallCount, tm.tvCallCount)
+	}
+}
+
+func TestResolveQueryReturnsFalseOnSearchMiss(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Some Unknown Show"); ok {
+		t.Error("expected ok=false when tmdb search finds nothing")
+	}
+	if tm.tvCallCount != 0 {
+		t.Errorf("expected no TVTitle call on a search miss, got %d", tm.tvCallCount)
+	}
+}
+
+func TestResolveQueryReturnsFalseOnSearchError(t *testing.T) {
+	tm := &fakeTMDB{searchErr: errors.New("tmdb search down")}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false on a tmdb search error")
+	}
+}
+
+func TestResolveQueryReturnsFalseOnLocalizationError(t *testing.T) {
+	tm := &fakeTMDB{searchID: 999, err: errors.New("tmdb down")}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false when the ru-RU title lookup fails")
+	}
+}
+
+func TestResolveQueryReturnsFalseWhenNoRussianTranslationExists(t *testing.T) {
+	tm := &fakeTMDB{searchID: 999, tvTitle: "Top Tennis Player"}
+	r := New(&fakeKinopoisk{}, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false when TMDB's ru-RU title falls back to the same English text")
 	}
 }
