@@ -10,14 +10,27 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
+
+// rateLimitCooldown is how long Search stops issuing real requests after a
+// 403 response, before probing again. Kinopoisk's free tier enforces a
+// daily quota with no reset time exposed to callers, so this can't wait
+// exactly as long as the real reset — it's a fixed, conservative backoff
+// that turns "every single lookup across every indexer poll re-hits an
+// already-exhausted quota" into an occasional probe instead.
+const rateLimitCooldown = 30 * time.Minute
 
 // Client queries the Kinopoisk API for a title's external IDs.
 type Client struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
+
+	mu           sync.Mutex
+	blockedUntil time.Time
+	now          func() time.Time
 }
 
 // New returns a Client with a sane default timeout. baseURL should be the
@@ -29,6 +42,7 @@ func New(baseURL, apiKey string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		now: time.Now,
 	}
 }
 
@@ -55,6 +69,10 @@ type searchResponse struct {
 // match. It returns (nil, nil) if the API returned zero results — that's
 // treated as a lookup miss, not an error, by callers.
 func (c *Client) Search(title string) (*Match, error) {
+	if until, blocked := c.rateLimited(); blocked {
+		return nil, fmt.Errorf("kinopoisk: backing off after a rate-limit response until %s", until.Format(time.RFC3339))
+	}
+
 	u := fmt.Sprintf("%s/v1.4/movie/search?query=%s&limit=1", c.BaseURL, url.QueryEscape(title))
 
 	req, err := http.NewRequest(http.MethodGet, u, nil)
@@ -71,8 +89,10 @@ func (c *Client) Search(title string) (*Match, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusForbidden {
+			c.setBlockedUntil(c.now().Add(rateLimitCooldown))
+		}
 		return nil, fmt.Errorf("kinopoisk returned status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 	}
 
@@ -94,4 +114,23 @@ func (c *Client) Search(title string) (*Match, error) {
 		m.ExternalID.IMDB = *doc.ExternalID.IMDB
 	}
 	return m, nil
+}
+
+// rateLimited reports whether Search is still backing off from a prior
+// 403 response, and until when.
+func (c *Client) rateLimited() (until time.Time, blocked bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.now().Before(c.blockedUntil) {
+		return c.blockedUntil, true
+	}
+	return time.Time{}, false
+}
+
+// setBlockedUntil records that Search should back off from real requests
+// until until.
+func (c *Client) setBlockedUntil(until time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.blockedUntil = until
 }
