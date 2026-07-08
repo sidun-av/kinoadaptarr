@@ -75,6 +75,17 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	if m, ok, err := r.Cache.Get(cacheKey); err != nil {
 		log.Printf("resolver: cache lookup failed for %q: %v", cacheKey, err)
 	} else if ok {
+		if m.ResolvedTitle == "" {
+			// A cached negative result (deliberately stored below) — a
+			// prior lookup determined this segment doesn't resolve to
+			// anything, so skip straight to "unchanged" instead of
+			// re-querying Kinopoisk for a title that's never going to
+			// match (release feeds are full of one-off/irrelevant
+			// Cyrillic titles that repeat across polls, e.g. sports
+			// broadcasts, and Kinopoisk's free tier has a tight daily
+			// request quota).
+			return releaseTitle
+		}
 		return rewrite.Title(releaseTitle, segment, m.ResolvedTitle)
 	}
 
@@ -85,6 +96,7 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 	}
 	if kpMatch == nil || kpMatch.ExternalID.TMDB == 0 {
 		log.Printf("resolver: no kinopoisk/tmdb match for %q", segment)
+		r.cacheNegative(cacheKey, 0)
 		return releaseTitle
 	}
 

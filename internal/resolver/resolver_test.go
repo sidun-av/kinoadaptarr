@@ -312,6 +312,43 @@ func TestResolveQueryCachesNegativeResultWhenNoRussianTranslationExists(t *testi
 	}
 }
 
+func TestResolveCachesNegativeResultOnKinopoiskMiss(t *testing.T) {
+	kp := &fakeKinopoisk{match: nil}
+	tm := &fakeTMDB{}
+	r := New(kp, tm, newFakeCache())
+
+	in := "Неизвестный Сериал Сезон 1 Серия 1"
+	first := r.Resolve(in, MediaTV)
+	second := r.Resolve(in, MediaTV)
+
+	if first != in || second != in {
+		t.Errorf("expected both calls to return input unchanged, got %q then %q", first, second)
+	}
+	if kp.callCount != 1 {
+		t.Errorf("expected the second call to be served from the negative cache (no repeat kinopoisk search), got %d calls", kp.callCount)
+	}
+}
+
+func TestResolveDoesNotCacheTransientKinopoiskErrorInForwardLookup(t *testing.T) {
+	kp := &fakeKinopoisk{err: errors.New("network error")}
+	tm := &fakeTMDB{}
+	r := New(kp, tm, newFakeCache())
+
+	in := "Первая ракетка Сезон 1"
+	r.Resolve(in, MediaTV)
+
+	kp.err = nil
+	kpMatch := &kinopoisk.Match{Name: "Первая ракетка"}
+	kpMatch.ExternalID.TMDB = 123456
+	kp.match = kpMatch
+	tm.tvTitle = "Top Tennis Player"
+
+	want := "Top Tennis Player S1"
+	if got := r.Resolve(in, MediaTV); got != want {
+		t.Errorf("expected a transient kinopoisk error not to be cached, so a later call still resolves; got %q, want %q", got, want)
+	}
+}
+
 func TestResolveQueryFallsBackToKinopoiskWhenTMDBMisses(t *testing.T) {
 	tm := &fakeTMDB{searchID: 0}
 	kpMatch := &kinopoisk.Match{Name: "Первая ракетка"}
