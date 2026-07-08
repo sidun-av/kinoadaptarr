@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,22 @@ func TestSearchReturnsErrorOnNon200(t *testing.T) {
 	c := New(srv.URL, "bad-key")
 	if _, err := c.Search("anything"); err == nil {
 		t.Fatal("expected an error for a non-200 response, got nil")
+	}
+}
+
+func TestSearchErrorIncludesResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"Дневной лимит запросов исчерпан"}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "test-key")
+	_, err := c.Search("anything")
+	if err == nil {
+		t.Fatal("expected an error for a 403 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "Дневной лимит запросов исчерпан") {
+		t.Errorf("expected error to include the response body for diagnosis, got: %v", err)
 	}
 }

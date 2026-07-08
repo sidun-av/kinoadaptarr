@@ -4,8 +4,10 @@
 package kinopoisk
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -69,7 +71,9 @@ func (c *Client) Search(title string) (*Match, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("kinopoisk returned status %d", resp.StatusCode)
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("kinopoisk returned status %d: %s", resp.StatusCode, bytes.TrimSpace(body))
 	}
 
 	var parsed searchResponse
