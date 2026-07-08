@@ -108,9 +108,11 @@ func (r *Resolver) Resolve(releaseTitle string, mediaType MediaType) string {
 
 // ResolveQuery attempts to translate an English (Sonarr-supplied) TV
 // series search query into its Russian title, for retrying a search that
-// returned zero results against a Russian-language tracker. Returns
-// ("", false) if no translation could be found — callers should treat
-// that as "nothing to retry with", not an error.
+// returned zero results against a Russian-language tracker. It tries TMDB
+// first, then falls back to Kinopoisk — which, being Russian-content
+// specialized, sometimes has very new or niche shows TMDB hasn't indexed
+// yet. Returns ("", false) if no translation could be found — callers
+// should treat that as "nothing to retry with", not an error.
 func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 	cacheKey := "revtv:" + strings.ToLower(strings.TrimSpace(englishQuery))
 
@@ -125,21 +127,48 @@ func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 		return m.ResolvedTitle, true
 	}
 
-	tmdbID, err := r.TMDB.SearchTV(englishQuery)
-	if err != nil {
-		log.Printf("resolver: tmdb search failed for %q: %v", englishQuery, err)
-		return "", false
+	title, ok, tmdbErr := r.resolveQueryViaTMDB(englishQuery)
+	if ok {
+		r.cacheReverseTitle(cacheKey, title)
+		return title, true
+	}
+
+	kpTitle, kpOk, kpErr := r.resolveQueryViaKinopoisk(englishQuery)
+	if kpOk {
+		r.cacheReverseTitle(cacheKey, kpTitle)
+		return kpTitle, true
+	}
+
+	// Only cache a negative result once every source has deterministically
+	// found nothing. A transient error (network/API outage) from either
+	// source is never cached here, since a later attempt might still
+	// succeed via that source.
+	if tmdbErr == nil && kpErr == nil {
+		r.cacheNegative(cacheKey, 0)
+	}
+	return "", false
+}
+
+// resolveQueryViaTMDB tries to translate englishQuery using TMDB's text
+// search plus a ru-RU localized title lookup. err is non-nil only for a
+// transient failure (network/API error) — a deterministic "nothing found"
+// is reported as ok=false, err=nil, so ResolveQuery knows whether the miss
+// is safe to cache.
+func (r *Resolver) resolveQueryViaTMDB(englishQuery string) (title string, ok bool, err error) {
+	tmdbID, searchErr := r.TMDB.SearchTV(englishQuery)
+	if searchErr != nil {
+		log.Printf("resolver: tmdb search failed for %q: %v", englishQuery, searchErr)
+		return "", false, searchErr
 	}
 	if tmdbID == 0 {
 		log.Printf("resolver: no tmdb match for query %q", englishQuery)
-		r.cacheNegative(cacheKey, 0)
-		return "", false
+		return "", false, nil
 	}
 
-	russianTitle, err := r.TMDB.TVTitle(tmdbID, "ru-RU")
-	if err != nil {
-		log.Printf("resolver: tmdb ru-RU lookup failed for tmdb id %d (query %q): %v", tmdbID, englishQuery, err)
-		return "", false
+	russianTitle, ruErr := r.TMDB.TVTitle(tmdbID, "ru-RU")
+	if ruErr != nil {
+		log.Printf("resolver: tmdb ru-RU lookup failed for tmdb id %d (query %q): %v", tmdbID, englishQuery, ruErr)
+		return "", false, ruErr
 	}
 	if !cyrillic.HasCyrillic(russianTitle) {
 		// No Russian translation available — TMDB fell back to a
@@ -148,15 +177,37 @@ func (r *Resolver) ResolveQuery(englishQuery string) (string, bool) {
 		// verbatim, correctly catches this even when TMDB's fallback text
 		// differs from the exact query Sonarr sent.
 		log.Printf("resolver: no russian translation for tmdb id %d (query %q)", tmdbID, englishQuery)
-		r.cacheNegative(cacheKey, tmdbID)
-		return "", false
+		return "", false, nil
 	}
+	return russianTitle, true, nil
+}
 
-	if err := r.Cache.Put(cacheKey, cache.Mapping{ResolvedTitle: russianTitle, TMDBID: tmdbID}); err != nil {
+// resolveQueryViaKinopoisk tries Kinopoisk as a second source when TMDB
+// doesn't have the show. err is non-nil only for a transient failure, by
+// the same convention as resolveQueryViaTMDB.
+func (r *Resolver) resolveQueryViaKinopoisk(englishQuery string) (title string, ok bool, err error) {
+	match, searchErr := r.Kinopoisk.Search(englishQuery)
+	if searchErr != nil {
+		log.Printf("resolver: kinopoisk reverse search failed for %q: %v", englishQuery, searchErr)
+		return "", false, searchErr
+	}
+	if match == nil || match.Name == "" {
+		log.Printf("resolver: no kinopoisk match for query %q", englishQuery)
+		return "", false, nil
+	}
+	if !cyrillic.HasCyrillic(match.Name) {
+		log.Printf("resolver: kinopoisk match for query %q has no russian name (%q)", englishQuery, match.Name)
+		return "", false, nil
+	}
+	return match.Name, true, nil
+}
+
+// cacheReverseTitle stores a resolved reverse-query (English -> Russian)
+// mapping.
+func (r *Resolver) cacheReverseTitle(cacheKey, title string) {
+	if err := r.Cache.Put(cacheKey, cache.Mapping{ResolvedTitle: title}); err != nil {
 		log.Printf("resolver: failed to cache reverse mapping for %q: %v", cacheKey, err)
 	}
-
-	return russianTitle, true
 }
 
 // cacheNegative records that cacheKey deterministically has nothing to

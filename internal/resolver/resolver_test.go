@@ -312,6 +312,91 @@ func TestResolveQueryCachesNegativeResultWhenNoRussianTranslationExists(t *testi
 	}
 }
 
+func TestResolveQueryFallsBackToKinopoiskWhenTMDBMisses(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	kpMatch := &kinopoisk.Match{Name: "Первая ракетка"}
+	kp := &fakeKinopoisk{match: kpMatch}
+	r := New(kp, tm, newFakeCache())
+
+	got, ok := r.ResolveQuery("Top Tennis Player")
+	if !ok {
+		t.Fatal("expected ok=true from the kinopoisk fallback")
+	}
+	if got != "Первая ракетка" {
+		t.Errorf("ResolveQuery() = %q, want %q", got, "Первая ракетка")
+	}
+	if kp.callCount != 1 {
+		t.Errorf("expected one kinopoisk lookup, got %d", kp.callCount)
+	}
+}
+
+func TestResolveQueryDoesNotCallKinopoiskWhenTMDBSucceeds(t *testing.T) {
+	tm := &fakeTMDB{searchID: 999, tvTitle: "Первая ракетка"}
+	kp := &fakeKinopoisk{match: &kinopoisk.Match{Name: "Первая ракетка"}}
+	r := New(kp, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); !ok {
+		t.Fatal("expected ok=true from TMDB")
+	}
+	if kp.callCount != 0 {
+		t.Errorf("expected kinopoisk not to be called when TMDB already succeeded, got %d calls", kp.callCount)
+	}
+}
+
+func TestResolveQueryReturnsFalseWhenKinopoiskAlsoMisses(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	kp := &fakeKinopoisk{match: nil}
+	r := New(kp, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Some Unknown Show"); ok {
+		t.Error("expected ok=false when both tmdb and kinopoisk find nothing")
+	}
+}
+
+func TestResolveQueryReturnsFalseWhenKinopoiskMatchIsNotRussian(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	kp := &fakeKinopoisk{match: &kinopoisk.Match{Name: "Top Tennis Player"}}
+	r := New(kp, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false when kinopoisk's match name isn't russian")
+	}
+}
+
+func TestResolveQueryCachesKinopoiskFallbackResult(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	kp := &fakeKinopoisk{match: &kinopoisk.Match{Name: "Первая ракетка"}}
+	r := New(kp, tm, newFakeCache())
+
+	first, _ := r.ResolveQuery("Top Tennis Player")
+	second, _ := r.ResolveQuery("Top Tennis Player")
+
+	if first != second {
+		t.Errorf("expected identical results, got %q then %q", first, second)
+	}
+	if tm.searchCallCount != 1 || kp.callCount != 1 {
+		t.Errorf("expected the second call to hit the cache, got tmdb search=%d kinopoisk=%d", tm.searchCallCount, kp.callCount)
+	}
+}
+
+func TestResolveQueryDoesNotCacheWhenKinopoiskErrorsTransiently(t *testing.T) {
+	tm := &fakeTMDB{searchID: 0}
+	kp := &fakeKinopoisk{err: errors.New("kinopoisk down")}
+	r := New(kp, tm, newFakeCache())
+
+	if _, ok := r.ResolveQuery("Top Tennis Player"); ok {
+		t.Error("expected ok=false on a kinopoisk error")
+	}
+
+	kp.err = nil
+	kp.match = &kinopoisk.Match{Name: "Первая ракетка"}
+
+	got, ok := r.ResolveQuery("Top Tennis Player")
+	if !ok || got != "Первая ракетка" {
+		t.Errorf("expected a transient kinopoisk error not to be cached, so a later call still resolves; got (%q, %v)", got, ok)
+	}
+}
+
 func TestResolveQueryDoesNotCacheTransientSearchError(t *testing.T) {
 	tm := &fakeTMDB{searchErr: errors.New("tmdb search down")}
 	r := New(&fakeKinopoisk{}, tm, newFakeCache())

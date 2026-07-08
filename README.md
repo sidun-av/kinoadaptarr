@@ -82,13 +82,16 @@ Player`) would never be found by search at all, since that English text
 never appears anywhere in the tracker's own release titles.
 
 To fix this, `t=tvsearch` requests that come back with zero results are
-retried once: kinoadaptarr translates `q` to its Russian equivalent via
-TMDB (a text search by `q`, then a `ru-RU`-localized title for the
-matched TMDB ID) and re-issues the same search with that instead. If no
-Russian title can be resolved, or the retry also finds nothing, the
-original (empty) result is returned unchanged — this can only turn some
-zero-result searches into successful ones, never make anything worse.
-Movie search (Radarr) doesn't have this fallback yet.
+retried once: kinoadaptarr translates `q` to its Russian equivalent and
+re-issues the same search with that instead. The translation first tries
+TMDB (a text search by `q`, then a `ru-RU`-localized title for the matched
+TMDB ID); if TMDB has no match, it falls back to a Kinopoisk search by
+`q` — Kinopoisk specializes in Russian-market content, so it sometimes has
+a very new or niche Russian-original show that TMDB hasn't indexed yet. If
+neither source resolves a Russian title, or the retry also finds nothing,
+the original (empty) result is returned unchanged — this can only turn
+some zero-result searches into successful ones, never make anything
+worse. Movie search (Radarr) doesn't have this fallback yet.
 
 ## Setup
 
